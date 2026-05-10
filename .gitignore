@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Local SQLite
+sessions.db
+sessions.db-journal
+sessions.db-wal
+sessions.db-shm
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local-only archives and hooks
+.JF-archive/
+.githooks/
+
+# Test / build artifacts
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
