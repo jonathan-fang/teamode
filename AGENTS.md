@@ -272,6 +272,39 @@ duplicate those rules here — read and follow conventions.md directly.
   output (anything Ocha sends to Discord).
 - Do not perform destructive git operations (force push, reset --hard,
   branch -D) without explicit user instruction.
-- Do not commit Discord tokens or `.env` files.
+
+## Token Security
+
+- Never commit `DISCORD_BOT_TOKEN`, `.env` files, or any other
+  credential to git. `.env` is gitignored; `.env.example` carries stub
+  values only.
+- Never log token values to stdout, stderr, or any file. If a token
+  must appear in a debug line, redact to last-four:
+  `Token: ****{last_4}`.
+- Never echo a token via `print()`, an error message, a Discord
+  message, or a commit message.
+- Tests must not require a live Discord token. Use the `FakeInteraction`
+  / `AsyncMock` patterns from § Test Patterns below.
+
+## Test Patterns
+
+These rules apply to every test you write. Full reference:
+`.project-meta/conventions.md` § Testing and
+`.project-meta/.LLMAO/test-patterns.md`. Embedded essentials:
+
+- **SQLite**: use `sqlite3.connect(":memory:")` for tests that
+  exercise the database. Do not mock the SQLite layer — exercise the
+  real query path.
+- **Async**: use `AsyncMock` (not `MagicMock`) for any awaitable mock.
+  `MagicMock` returns a `MagicMock` from `await`, which silently
+  breaks async paths.
+- **Discord**: never hit a live Discord gateway in any test. Use a
+  `FakeInteraction` fixture that exposes only the attributes the code
+  under test reads.
+- **Voice**: mock `voice_client.play`; do not shell out to `ffmpeg`
+  from a test.
+- **Patch where used, not where defined**: if module A imports
+  `helper` from module B, patch `A.helper` in tests targeting A —
+  not `B.helper`.
 
 } //APM_RULES

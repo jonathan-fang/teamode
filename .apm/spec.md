@@ -76,7 +76,6 @@ The repository already contains:
 | Discord library | `discord.py` with `[voice]` extras | Same |
 | Async runtime | `asyncio` (stdlib) | discord.py default |
 | Persistence | SQLite (`sqlite3` stdlib) | `docs/sqlite-schema.md` |
-| Voice codec | libopus + `ffmpeg` (system binary) | discord.py voice extras requirement |
 | Env loading | `python-dotenv` (dev convenience) | AGENTS.md § Dependencies |
 | Test runner | `pytest` + `pytest-asyncio` | `.project-meta/conventions.md` § Testing |
 | Type checker | `pyright` | Same |
@@ -84,6 +83,26 @@ The repository already contains:
 
 Dependency pinning rule: pin exact versions in `requirements.txt` per
 `.project-meta/conventions.md` § Dependency Maintenance.
+
+### System requirements (deployment, not design)
+
+These are runtime prerequisites the host machine must provide. They
+are not architectural decisions; they are what `discord.py[voice]`
+needs to function.
+
+- **`ffmpeg` on `PATH`** — discord.py uses `FFmpegPCMAudio` to play
+  `assets/reverie.wav`. ffmpeg reads the WAV and produces a raw PCM
+  stream. Without it, the first `voice_client.play(...)` call fails.
+- **`libopus`** — Discord's voice protocol mandates the Opus codec.
+  discord.py encodes the PCM stream from ffmpeg into Opus packets
+  before sending to Discord. Usually bundled with
+  `pip install "discord.py[voice]"` (along with PyNaCl for
+  encryption); a system `libopus0` package may be required on some
+  Linux distros.
+- **Python 3.11+** — runtime version, see Stack table above.
+
+These belong in the README's "Requirements" section as setup
+instructions for self-hosters, not in the bot's source code.
 
 ## Bot Identity and Invocation
 
@@ -149,30 +168,100 @@ state survives a process restart.
                       └─ open intention modal
                            └─ facilitator submits modal
                                 └─ UPDATE row (intention, duration_minutes)
-                                     └─ bot joins voice channel
-                                          └─ UPDATE row (started_at, status='active')
-                                               └─ post active timer message
-                                                    └─ countdown loop (edit every 10s)
-                                                         └─ at zero:
-                                                              ├─ post end-of-session embed (🍵🌿✨ flourish)
-                                                              ├─ play assets/reverie.wav in voice
-                                                              ├─ @-mention facilitator
-                                                              └─ post follow-up button row
+                                     └─ post participant intention prompt
+                                        ("Everyone — share your intention in chat or voice")
+                                          └─ bot joins voice channel
+                                               └─ UPDATE row (started_at, status='active')
+                                                    └─ post active timer message
+                                                         └─ countdown loop (edit every 10s)
+                                                              └─ at zero:
+                                                                   ├─ post end-of-session embed (🍵🌿✨ flourish)
+                                                                   ├─ post participant follow-up prompt
+                                                                   │  ("Everyone — share how the session went")
+                                                                   ├─ play assets/reverie.wav in voice
+                                                                   ├─ @-mention facilitator
+                                                                   └─ post follow-up button row
                                                                    └─ facilitator clicks [Y|N] OR timeout OR end-early
                                                                         ├─ if N: prompt for "why" text
                                                                         └─ UPDATE row (status, completed_intention, followup_note, ended_at)
                                                                              └─ bot leaves voice
 ```
 
+### Message visibility
+
+All session messages — welcome embed, active timer, end-of-session
+embed, follow-up question — are **public to the voice channel's text
+chat**, not ephemeral. Anyone with access to that text channel
+(everyone in the voice channel, plus anyone with channel-view
+permission in the server) sees them. Mid-session joiners — anyone who
+joins the voice channel after the session is already running — gain
+visibility automatically because they now have access to the voice
+channel's text chat. They see all subsequent edits and the
+end-of-session messages, and they can react to the follow-up if they
+are in voice when it posts.
+
+The intention text is also public: once the facilitator submits the
+intention modal, the bot publishes the intention into the active
+timer message. All participants and joiners see it. (Discord modals
+are by design a single-user form — only the user who clicked the
+button gets the modal — but the *result* is broadcast.)
+
+The only ephemeral messages are **refusals**: wrong-channel,
+not-in-voice, session-already-active, unauthorised click. These stay
+private to the invoker so they don't pollute the channel.
+
+Voice channel seat capacity is a Discord-platform concern (default 99
+users, configurable per channel by server admins). The bot does not
+enforce or surface this — when a channel is full, Discord rejects new
+joiners with its own message before they reach the bot.
+
+### Participant flow (other voice-channel members)
+
+The session has two parallel flows: the **facilitator flow** (drives the
+state machine — picks duration, submits intention, answers follow-up) and
+the **participant flow** (everyone else in the voice channel — invited
+to share, but not driving state).
+
+**Participant prompts.** The bot posts two non-interactive text prompts
+during the session:
+
+| When | Prompt |
+|---|---|
+| Right after the facilitator submits their intention modal, before the timer starts | "Everyone — type your intention in chat or share it in voice. Take a minute." |
+| Right after the end-of-session embed, before the facilitator's Y/N follow-up | "Everyone — share how the session went, in chat or voice." |
+
+The prompts are **plain text messages** in the channel — not embeds,
+not modals, no buttons. Anyone may respond by chatting in the channel
+or speaking in voice.
+
+**No capture.** The bot does not parse, log, or persist participant
+chat messages or voice. Participation is social, not bookkept. The
+SQLite schema is unchanged. (Capture-via-listener and capture-via-modal
+are tracked in `TODO.md` as v2 ideas.)
+
+**Reactions remain.** The 👍/👎 reactions on the follow-up button row
+are unchanged — they coexist with the participant prompt. Reactions
+are a passive social signal; the prompt is an active invitation.
+
+**Mid-session joiners** see all subsequent prompts and may react to
+the follow-up if they are in voice when it posts. They miss the
+intention prompt because it's already past — that's fine; they can
+still chat their intention if they want.
+
 ### Authorization
 
-| Action | Allowed user(s) | Unauthorised behaviour |
+The matrix below is about **who can interact**, not who can see.
+Everyone with access to the channel sees the buttons and reactions;
+only the facilitator's clicks count for state transitions.
+
+| Action | Who can interact | Effect of unauthorised click |
 |---|---|---|
-| Timer-pick buttons | Facilitator only | Ephemeral: "Only the facilitator can answer." |
-| Intention modal | Facilitator only | Modal isn't shown to non-facilitator clicks |
-| Follow-up Y/N | Facilitator only | Ephemeral: "Only the facilitator can answer." |
-| Follow-up reactions (👍/👎) | Anyone in voice channel | Recorded as social signal only; not authoritative for `completed_intention` |
-| Facilitator handoff (after departure) | System (RNG) | Bot announces new facilitator |
+| Timer-pick buttons (`[10] [25] [50]`) | Facilitator only | Ephemeral: "Only the facilitator can answer." |
+| Intention modal submission | Facilitator only (modal opens for them; non-facilitators can't click the timer-pick that triggers it) | N/A — modal never opens for non-facilitator |
+| Follow-up Y/N buttons | Facilitator only | Ephemeral: "Only the facilitator can answer." |
+| Follow-up "end early" button | Facilitator only | Ephemeral: "Only the facilitator can end the follow-up window." |
+| Follow-up reactions (👍/👎) | Anyone in the voice channel | Recorded as social signal only; not authoritative for `completed_intention` |
+| Facilitator handoff (after departure) | System (`random.choice` over remaining voice members) | N/A — bot-driven, not user-driven |
 
 ## UI Surface
 
