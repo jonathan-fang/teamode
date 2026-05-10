@@ -27,6 +27,7 @@ sessions.db-shm
 # Local-only archives and hooks
 .JF-archive/
 .githooks/
+.debug-images/
 
 # Test / build artifacts
 .pytest_cache/
