@@ -21,8 +21,8 @@ CREATE TABLE sessions (
     text_channel_id      TEXT    NOT NULL,
     voice_channel_id     TEXT    NOT NULL,
     facilitator_id       TEXT    NOT NULL,
-    started_at           TEXT    NOT NULL,
-    duration_minutes     INTEGER NOT NULL,
+    started_at           TEXT,
+    duration_minutes     INTEGER,
     intention            TEXT,
     ended_at             TEXT,
     completed_intention  INTEGER,
@@ -99,6 +99,9 @@ ISO-8601 UTC timestamp at the moment the timer was confirmed and started
   lexicographically).
 - **Format**: `YYYY-MM-DDTHH:MM:SS.sssZ` — produced by
   `datetime.now(timezone.utc).isoformat()`.
+- **Nullable** until the `active` transition. While the row is in
+  `pending` or `intention_set` the timer has not yet started, so this
+  column is NULL.
 
 ### `duration_minutes`
 The chosen timer length: 10, 25, or 50 for MVP.
@@ -106,6 +109,8 @@ The chosen timer length: 10, 25, or 50 for MVP.
 - **Type**: INTEGER.
 - **Validation**: enforced at choice-time (button options) — not a free
   field.
+- **Nullable** until the facilitator picks a duration. While the row is
+  in `pending` this column is NULL.
 
 ### `intention`
 Free text the facilitator typed into the modal, e.g. "Finish the v26Q2.2.0
@@ -135,8 +140,12 @@ unmet intention. Nullable.
 - **Type**: TEXT.
 
 ### `status`
-Terminal state of the session. Enum of:
-- `active` — timer is running or follow-up window open.
+Current state of the session. Enum of:
+- `pending` — `/teamode` invocation accepted; awaiting timer-pick.
+- `intention_set` — duration picked and intention captured; bot is
+  about to join voice and start the timer.
+- `active` — timer is running.
+- `followup` — timer reached zero; awaiting facilitator Y/N answer.
 - `completed` — timer finished and follow-up answered.
 - `followup_timeout` — timer finished but follow-up was not answered within
   3 minutes.
