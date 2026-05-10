@@ -10,8 +10,8 @@ title: TeaMode
 
 | Task | Status | Domain | Branch |
 |------|--------|--------|--------|
-| 1.1 | Active | core | chore/package-scaffolding |
-| 1.2 | Waiting: 1.1 | core | |
+| 1.1 | Done | core | |
+| 1.2 | Active | core | chore/sqlite-schema |
 
 ## Version Control
 
@@ -21,8 +21,10 @@ title: TeaMode
 
 ## Working Notes
 
-- `.venv/` exists at repo root (Python 3.12.3) — Task 1.1 should `pip install -r requirements.txt` into it rather than recreating.
+- `.venv/` exists at repo root (Python 3.12.3) — workers should use it via `.venv/bin/python -m pip install -r requirements.txt`, not recreate.
 - `.apm/`, `.claude/`, `.project-meta/`, `.LLMAO/` are intentionally tracked on `main` per `.project-meta/conventions.md` § "Session artifacts on main" — do not gitignore.
 - Dispatch mode: foreground only (User has not configured permissions for background subagents).
 - Holistic verification points flagged by Planner: end of Stages 2, 3, 4, 5, 6 — assess at each Stage close.
+- `pytest-asyncio` deprecation: tests without `asyncio_mode` config produce a warning. Address in early Stage 2 (T2.1) when first async tests arrive — set `asyncio_mode = strict` in `pyproject.toml` or `pytest.ini`.
+- Worker false-positive note: in Task Prompts, name the package as "`app/`" explicitly. The repo root directory is also named `teamode/` on disk (per AGENTS.md tree diagram), and a worker re-reading AGENTS.md may conflate the two.
 
