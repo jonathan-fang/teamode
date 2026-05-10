@@ -12,8 +12,8 @@ title: TeaMode
 
 | Task | Status | Domain | Branch |
 |------|--------|--------|--------|
-| 2.1 | Active | core | feat/session-state-machine |
-| 2.2 | Waiting: 2.1 | discord | |
+| 2.1 | Done | core | |
+| 2.2 | Active | discord | feat/slash-command-welcome |
 
 ## Version Control
 

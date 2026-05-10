@@ -8,6 +8,7 @@ title: TeaMode
 
 - **`pytest-asyncio` config:** the project uses `pytest-asyncio==0.26.0` without an explicit `asyncio_mode` setting, which emits a deprecation warning every test run. The first task that introduces async tests (T2.1) should add `asyncio_mode = "strict"` to `pyproject.toml` (or `[pytest]` in `pytest.ini`) to silence the warning and pin behavior before the library's default flips.
 - **Package vs repo-root naming:** the Python package is `app/`; the repo root directory on disk is also named `teamode/` (visible in `AGENTS.md`'s tree diagram, line 22). When dispatching, refer to the package as "`app/`" explicitly to avoid worker confusion when they re-read `AGENTS.md`. The slash command `/teamode` and entry-point file `teamode.py` are unrelated to either.
+- **Test environment dependency:** `app/config.py` raises `RuntimeError` at module import time when `DISCORD_BOT_TOKEN` is unset. The whole test suite depends on `tests/conftest.py` calling `os.environ.setdefault("DISCORD_BOT_TOKEN", "test-stub-token")` before any `app.*` import. New test modules inherit this for free; running tests outside pytest (e.g. ad-hoc `python -c "from app import session"`) needs the env var set manually. If this brittleness bites again, a factory pattern (`Config.load()`) is the right refactor — punt until then.
 
 ## Stage Summaries
 
