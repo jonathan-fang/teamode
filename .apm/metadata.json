@@ -1,0 +1,32 @@
+{
+  "source": "custom",
+  "repository": "sdi2200262/apm-auto",
+  "releaseVersion": "v1.0.1",
+  "cliVersion": "1.0.1",
+  "assistants": [
+    "claude"
+  ],
+  "installedFiles": {
+    "claude": [
+      ".claude/agents/apm-archive-explorer.md",
+      ".claude/agents/apm-worker.md",
+      ".claude/apm-guides/context-gathering.md",
+      ".claude/apm-guides/task-assignment.md",
+      ".claude/apm-guides/task-review.md",
+      ".claude/apm-guides/work-breakdown.md",
+      ".claude/commands/apm-1-initiate-planner.md",
+      ".claude/commands/apm-2-initiate-manager.md",
+      ".claude/commands/apm-3-handoff-manager.md",
+      ".claude/commands/apm-4-summarize-session.md",
+      ".claude/commands/apm-5-recover.md",
+      ".claude/skills/apm-communication/SKILL.md"
+    ],
+    "_apm": [
+      ".apm/memory/index.md",
+      ".apm/plan.md",
+      ".apm/spec.md",
+      ".apm/tracker.md"
+    ]
+  },
+  "installedAt": "2026-05-10T03:12:58.321Z"
+}
