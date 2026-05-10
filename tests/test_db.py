@@ -80,8 +80,17 @@ def test_schema_init_creates_table(conn: sqlite3.Connection) -> None:
 def test_schema_columns_match_spec(conn: sqlite3.Connection) -> None:
     """Columns produced by init_db match the schema reference exactly."""
     cur = conn.execute("PRAGMA table_info(sessions)")
-    actual_columns = {row[1] for row in cur.fetchall()}
+    rows = cur.fetchall()
+    actual_columns = {row[1] for row in rows}
     assert actual_columns == EXPECTED_COLUMNS
+
+
+def test_schema_nullable_columns(conn: sqlite3.Connection) -> None:
+    """started_at and duration_minutes must be nullable (notnull=0)."""
+    cur = conn.execute("PRAGMA table_info(sessions)")
+    col_notnull = {row[1]: row[3] for row in cur.fetchall()}
+    assert col_notnull["started_at"] == 0, "started_at should be nullable"
+    assert col_notnull["duration_minutes"] == 0, "duration_minutes should be nullable"
 
 
 def test_schema_init_idempotent() -> None:
@@ -104,8 +113,8 @@ def test_schema_init_idempotent_same_conn(conn: sqlite3.Connection) -> None:
             text_channel_id TEXT NOT NULL,
             voice_channel_id TEXT NOT NULL,
             facilitator_id TEXT NOT NULL,
-            started_at TEXT NOT NULL,
-            duration_minutes INTEGER NOT NULL,
+            started_at TEXT,
+            duration_minutes INTEGER,
             intention TEXT,
             ended_at TEXT,
             completed_intention INTEGER,
@@ -133,7 +142,8 @@ def test_insert_pending_session_row_state(conn: sqlite3.Connection) -> None:
     assert row["voice_channel_id"] == "333"
     assert row["facilitator_id"] == "444"
     assert row["status"] == "pending"
-    assert row["started_at"] is not None
+    assert row["started_at"] is None
+    assert row["duration_minutes"] is None
     assert row["ended_at"] is None
     assert row["intention"] is None
     assert row["handoff_facilitator_id"] is None
@@ -152,8 +162,9 @@ def test_insert_pending_session_returns_id(conn: sqlite3.Connection) -> None:
 
 
 def test_update_duration(conn: sqlite3.Connection) -> None:
-    """update_duration sets duration_minutes on the row."""
+    """update_duration sets duration_minutes on the row (was NULL before)."""
     session_id = _insert_base(conn)
+    assert _fetch(conn, session_id)["duration_minutes"] is None
     update_duration(conn, session_id=session_id, duration_minutes=25)
     row = _fetch(conn, session_id)
     assert row["duration_minutes"] == 25
@@ -190,8 +201,9 @@ def test_update_intention_empty_string(conn: sqlite3.Connection) -> None:
 
 
 def test_update_started_at_active(conn: sqlite3.Connection) -> None:
-    """update_started_at_active sets started_at and status='active'."""
+    """update_started_at_active sets started_at (was NULL) and status='active'."""
     session_id = _insert_base(conn)
+    assert _fetch(conn, session_id)["started_at"] is None
     ts = "2026-05-10T12:00:00+00:00"
     update_started_at_active(conn, session_id=session_id, started_at=ts)
     row = _fetch(conn, session_id)
@@ -202,6 +214,7 @@ def test_update_started_at_active(conn: sqlite3.Connection) -> None:
 def test_update_started_at_active_defaults_to_now(conn: sqlite3.Connection) -> None:
     """update_started_at_active uses the current UTC time when started_at is omitted."""
     session_id = _insert_base(conn)
+    assert _fetch(conn, session_id)["started_at"] is None
     update_started_at_active(conn, session_id=session_id)
     row = _fetch(conn, session_id)
     assert row["started_at"] is not None

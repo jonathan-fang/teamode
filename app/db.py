@@ -15,8 +15,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     text_channel_id      TEXT    NOT NULL,
     voice_channel_id     TEXT    NOT NULL,
     facilitator_id       TEXT    NOT NULL,
-    started_at           TEXT    NOT NULL,
-    duration_minutes     INTEGER NOT NULL,
+    started_at           TEXT,
+    duration_minutes     INTEGER,
     intention            TEXT,
     ended_at             TEXT,
     completed_intention  INTEGER,
@@ -65,9 +65,9 @@ def insert_pending_session(
 ) -> int:
     """INSERT a row with status='pending' at /teamode invocation.
 
-    started_at is set to the current UTC time as an invocation timestamp;
-    it will be overwritten by update_started_at_active once the timer begins.
-    duration_minutes is set to 0 as a placeholder until the facilitator picks.
+    started_at and duration_minutes are left NULL; they are populated by
+    update_started_at_active (when the timer begins) and update_duration
+    (when the facilitator picks a length) respectively.
 
     Returns the new row id.
     """
@@ -75,16 +75,14 @@ def insert_pending_session(
         """
         INSERT INTO sessions (
             guild_id, text_channel_id, voice_channel_id, facilitator_id,
-            started_at, duration_minutes, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            status
+        ) VALUES (?, ?, ?, ?, ?)
         """,
         (
             guild_id,
             text_channel_id,
             voice_channel_id,
             facilitator_id,
-            _now_utc(),
-            0,
             "pending",
         ),
     )
