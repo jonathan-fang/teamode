@@ -184,6 +184,7 @@ References:
   facilitator-led structure inspired TeaMode's flow.
 - Groove (RIP) — the body-doubling co-working app whose session
   rhythm this bot tries to keep alive.
+- [Japanese Simple Timer](https://github.com/simple-timer) [Discord link to Japanese Simple Timer](https://discord.com/discovery/applications/757427376341778494)
 
 ---
 
