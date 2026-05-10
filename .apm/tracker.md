@@ -10,7 +10,7 @@ title: TeaMode
 
 | Task | Status | Domain | Branch |
 |------|--------|--------|--------|
-| 1.1 | Ready | core | |
+| 1.1 | Active | core | chore/package-scaffolding |
 | 1.2 | Waiting: 1.1 | core | |
 
 ## Version Control
