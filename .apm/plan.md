@@ -1,6 +1,6 @@
 ---
 title: TeaMode
-modified: Plan creation by the Planner.
+modified: Plan creation by the Planner. Manager renamed package teamode/ → app/ before Stage 1 dispatch.
 ---
 
 # APM Plan
@@ -9,8 +9,8 @@ modified: Plan creation by the Planner.
 
 | Worker Group | Domain | Description |
 |---|---|---|
-| Core | Domain logic — session state machine, persistence, voice plumbing, edge cases | Owns `teamode/session.py`, `teamode/db.py`, `teamode/voice.py`, `teamode/config.py`, and tests for those modules. |
-| Discord | Discord-facing layer — slash command, interaction handlers, embeds, button rows, modals, message edit cycle | Owns `teamode.py`, `teamode/bot.py`, and tests for the bot module. |
+| Core | Domain logic — session state machine, persistence, voice plumbing, edge cases | Owns `app/session.py`, `app/db.py`, `app/voice.py`, `app/config.py`, and tests for those modules. |
+| Discord | Discord-facing layer — slash command, interaction handlers, embeds, button rows, modals, message edit cycle | Owns `teamode.py`, `app/bot.py`, and tests for the bot module. |
 
 ## Stages
 
@@ -147,14 +147,14 @@ style T6_2 fill:#7B9D6F,color:#000
 ### Task 1.1: Package scaffolding + env loader - Core
 
 * **Objective:** Create the Python package skeleton, dependency manifest, and environment-variable loader.
-* **Output:** `teamode/__init__.py`, `teamode.py` entry stub, `teamode/config.py`, `requirements.txt`, `.env.example`, `tests/__init__.py`, `tests/test_config.py`.
+* **Output:** `app/__init__.py`, `teamode.py` entry stub, `app/config.py`, `requirements.txt`, `.env.example`, `tests/__init__.py`, `tests/test_config.py`.
 * **Validation:** Package imports without error. `python3 -c "from teamode import config"` succeeds. `pyright` and `ruff check` clean. `tests/test_config.py` covers happy path and missing-token error.
 * **Guidance:** Follow the layout in `AGENTS.md` § "Project Structure & Module Organization." Pin `discord.py[voice]`, `python-dotenv`, `pytest`, `pytest-asyncio`, `ruff`, `pyright` exactly per `.project-meta/conventions.md` § "Dependency Maintenance." `config.py` reads `DISCORD_BOT_TOKEN` (required, raise on missing) and `TEAMODE_DB_PATH` (default `./sessions.db`). `.env.example` carries stub values; never commit a real `.env` (already in `.gitignore`).
 * **Dependencies:** None.
 
-1. Create `teamode/__init__.py`, `teamode.py` entry stub, `tests/__init__.py`.
+1. Create `app/__init__.py`, `teamode.py` entry stub, `tests/__init__.py`.
 2. Write `requirements.txt` pinning all dependencies to exact versions.
-3. Implement `teamode/config.py` with env loading and clear error on missing required values.
+3. Implement `app/config.py` with env loading and clear error on missing required values.
 4. Add `.env.example` with stub values.
 5. Write `tests/test_config.py` covering "loads correctly" and "raises on missing token."
 6. Run `ruff format`, `ruff check`, `.venv/bin/python -m pytest tests/`, `pyright`. Report results.
@@ -162,12 +162,12 @@ style T6_2 fill:#7B9D6F,color:#000
 ### Task 1.2: SQLite schema + db helpers - Core
 
 * **Objective:** Implement the SQLite schema, idempotent init, and write helpers for every state transition.
-* **Output:** `teamode/db.py`, `tests/test_db.py`.
+* **Output:** `app/db.py`, `tests/test_db.py`.
 * **Validation:** `tests/test_db.py` exercises every write helper against `:memory:` and asserts schema columns match `docs/sqlite-schema.md` exactly. All validation gates clean.
 * **Guidance:** Schema authoritative source: `docs/sqlite-schema.md`. Use `CREATE TABLE IF NOT EXISTS` for idempotent init at startup. Cover every operation listed in the Spec § "Persistence — Write discipline" table: `insert_pending_session`, `update_duration`, `update_intention_and_status`, `update_started_at_active`, `update_to_followup`, `update_completed`, `update_followup_timeout`, `update_handoff_facilitator`, `update_cancelled`, `reconcile_crashed_sessions`. Use `sqlite3` stdlib synchronously inside coroutines per `.project-meta/conventions.md` § "TeaMode — Project-Specific" / "SQLite write discipline." No mocks for SQLite — exercise the real path with `:memory:` per `.project-meta/.LLMAO/test-patterns.md`.
 * **Dependencies:** Task 1.1.
 
-1. Implement `teamode/db.py` with `init_db(path)`, write helpers, and `reconcile_crashed_sessions()`.
+1. Implement `app/db.py` with `init_db(path)`, write helpers, and `reconcile_crashed_sessions()`.
 2. Write `tests/test_db.py` exercising schema init, every write helper, and reconciliation against `:memory:`.
 3. Run validation pipeline.
 
@@ -176,7 +176,7 @@ style T6_2 fill:#7B9D6F,color:#000
 ### Task 2.1: Session state machine + in-memory registry - Core
 
 * **Objective:** Implement the session state machine and the in-memory `SessionRegistry` keyed by `session_id`.
-* **Output:** `teamode/session.py`, `tests/test_session.py`.
+* **Output:** `app/session.py`, `tests/test_session.py`.
 * **Validation:** Tests cover every state transition, refusal paths (transition from invalid prior state), and parallel-channel sessions (two sessions in different channels do not collide). All validation gates clean.
 * **Guidance:** Implement per Spec § "Session Lifecycle." States are an enum (`SessionState.PENDING`, `INTENTION_SET`, `ACTIVE`, `FOLLOWUP`, `COMPLETED`, `FOLLOWUP_TIMEOUT`, `CANCELLED`, `CRASHED`). `Session` dataclass holds session id, channel ids, facilitator id, state, intention, etc. Transition functions both update in-memory state and write the SQLite row using helpers from Task 1.2. The `SessionRegistry` (a dict keyed by `session_id` plus a reverse index by `text_channel_id`) is the source of truth for "is there an active session in channel X?" lookups; SQLite is the durable redundant truth used at startup. Cross-session safety: every transition reads the registry and confirms the session is in a valid prior state; raises otherwise.
 * **Dependencies:** Task 1.2.
@@ -190,12 +190,12 @@ style T6_2 fill:#7B9D6F,color:#000
 ### Task 2.2: Slash command + invocation guard + welcome embed - Discord
 
 * **Objective:** Register `/teamode`, implement the cumulative invocation guard, and post the welcome embed with the timer-pick button row on guard pass.
-* **Output:** `teamode/bot.py`, `teamode.py` entry wired, `tests/test_bot_invocation.py`.
+* **Output:** `app/bot.py`, `teamode.py` entry wired, `tests/test_bot_invocation.py`.
 * **Validation:** Unit tests with `FakeInteraction` cover each guard branch (pass, wrong-channel, not-in-voice, session-already-active). Refusal messages match Spec verbatim. Manual Discord smoke test confirms slash command registers in the dev guild and welcome embed renders with the matcha-sage accent.
 * **Guidance:** Register `/teamode` guild-scoped per Spec § "Bot Identity and Invocation." Guard checks per Spec § "Invocation guard (cumulative)" — order matters: channel type, in-voice, no-active-session. Refusal messages are ephemeral with muted-grey accent per Spec § "Invocation guard" failure table. Welcome embed uses matcha sage `#7B9D6F`, the 🍵 + ⏳ pair, and the welcome copy from Spec § "Session Lifecycle — Sequence of bot actions." Timer-pick button row uses custom_id namespace `teamode:<session_id>:timer:<10|25|50>` per `.project-meta/UI-ADR.md` § "Custom_id namespace." On guard pass, call `session.create_pending_session(...)` from Task 2.1 and post the welcome embed with buttons attached. **Do not** handle the button-click yet — Task 3.2.
 * **Dependencies:** Task 2.1.
 
-1. Implement `teamode/bot.py` with `discord.Client` + `app_commands.CommandTree` and register `/teamode`.
+1. Implement `app/bot.py` with `discord.Client` + `app_commands.CommandTree` and register `/teamode`.
 2. Implement the cumulative guard logic; emit ephemeral refusals with the muted-grey accent.
 3. On guard pass, call `session.create_pending_session(...)`, then post the welcome embed + timer-pick button row using the custom_id namespace.
 4. Wire `teamode.py` entry point: load config, construct bot, run event loop. Call `db.init_db(...)` and `db.reconcile_crashed_sessions(...)` at startup.
@@ -207,24 +207,24 @@ style T6_2 fill:#7B9D6F,color:#000
 ### Task 3.1: Voice connection plumbing - Core
 
 * **Objective:** Implement the voice connection helpers (connect, play_reverie, disconnect) with the asset path constant.
-* **Output:** `teamode/voice.py`, `tests/test_voice.py`.
+* **Output:** `app/voice.py`, `tests/test_voice.py`.
 * **Validation:** Tests mock `voice_client.play` and assert it was called with the correct `FFmpegPCMAudio` source path. Smoke test confirms reverie audibly plays in a real voice channel. All validation gates clean.
-* **Guidance:** Implement `teamode/voice.py` with `connect(voice_channel) -> VoiceClient`, `play_reverie(voice_client)`, `disconnect(voice_client)`. Constant: `REVERIE_PATH = Path(__file__).parent / ".." / "assets" / "reverie.wav"` resolved once at import per Spec § "Voice — Asset path." Use `discord.FFmpegPCMAudio(str(REVERIE_PATH))`. On `play()` raising, propagate — the Discord layer (Task 4.1 / 4.2) handles the @-mention fallback. On `connect()` raising, propagate — the slash-command flow surfaces an ephemeral refusal. Mock `voice_client.play` in tests; do not shell out to `ffmpeg`.
+* **Guidance:** Implement `app/voice.py` with `connect(voice_channel) -> VoiceClient`, `play_reverie(voice_client)`, `disconnect(voice_client)`. Constant: `REVERIE_PATH = Path(__file__).parent / ".." / "assets" / "reverie.wav"` resolved once at import per Spec § "Voice — Asset path." Use `discord.FFmpegPCMAudio(str(REVERIE_PATH))`. On `play()` raising, propagate — the Discord layer (Task 4.1 / 4.2) handles the @-mention fallback. On `connect()` raising, propagate — the slash-command flow surfaces an ephemeral refusal. Mock `voice_client.play` in tests; do not shell out to `ffmpeg`.
 * **Dependencies:** Task 1.1.
 
-1. Implement `teamode/voice.py` with the three helpers and the `REVERIE_PATH` constant.
+1. Implement `app/voice.py` with the three helpers and the `REVERIE_PATH` constant.
 2. Write `tests/test_voice.py` mocking `voice_client.play`. Verify `FFmpegPCMAudio` is constructed with the resolved reverie path.
 3. Run validation pipeline. Deliver voice-smoke-test command (manual: bot joins voice, plays reverie via a temporary admin trigger if needed).
 
 ### Task 3.2: Timer-pick handler + intention modal + participant prompt - Discord
 
 * **Objective:** Implement the timer-pick button click handler (facilitator-only), the intention modal, and the post-intention participant prompt.
-* **Output:** `teamode/bot.py` extended with timer-pick handler + Modal subclass; `tests/test_bot_intention.py`.
+* **Output:** `app/bot.py` extended with timer-pick handler + Modal subclass; `tests/test_bot_intention.py`.
 * **Validation:** Tests cover facilitator-click and non-facilitator-click branches; modal submission unit-tested with a faked Modal interaction; participant prompt content matches Spec verbatim. Smoke test confirms the modal opens for the facilitator and submission publishes the intention.
 * **Guidance:** Timer-pick button click handler dispatches on the custom_id pattern from Task 2.2. Facilitator-only authorization per Spec § "Authorization" — non-facilitator clicks get the standard ephemeral refusal "Only the facilitator can answer." On facilitator click: call `session.set_duration(...)`, then open the intention `Modal` (single text input, max 4000 chars per Spec § "Persistence" / Discord limit). On modal submit: call `session.set_intention(...)`. Post the participant intention prompt as a plain text message in the channel: "Everyone — type your intention in chat or share it in voice. Take a minute." per Spec § "Participant flow."
 * **Dependencies:** Task 2.1, Task 2.2.
 
-1. Add timer-pick button click handler in `teamode/bot.py` dispatching on `teamode:<session_id>:timer:<value>`.
+1. Add timer-pick button click handler in `app/bot.py` dispatching on `teamode:<session_id>:timer:<value>`.
 2. Define the intention `Modal` subclass with one `TextInput`.
 3. Wire facilitator authorization: non-facilitator clicks receive ephemeral refusal.
 4. Wire modal submission to `session.set_intention(...)` then post the participant intention prompt.
@@ -234,7 +234,7 @@ style T6_2 fill:#7B9D6F,color:#000
 ### Task 3.3: Active timer message + countdown loop + edit cycle - Discord
 
 * **Objective:** After intention is set, connect to voice, post the active timer message, and run the countdown loop with the 10s edit cycle and rate-limit handling.
-* **Output:** `teamode/session.py` countdown coroutine; `teamode/bot.py` edit-cycle implementation; `tests/test_session_countdown.py`.
+* **Output:** `app/session.py` countdown coroutine; `app/bot.py` edit-cycle implementation; `tests/test_session_countdown.py`.
 * **Validation:** Fake-clock test runs a short countdown end-to-end and asserts edit cadence is 10s. Smoke test runs a 10-minute session and confirms the timer ticks correctly with intention echoed.
 * **Guidance:** After `session.set_intention(...)` returns in Task 3.2's flow, the bot calls `voice.connect(voice_channel)` (Task 3.1), then `session.mark_active(...)` (writes `started_at`, status='active'), then posts the active timer message and starts the countdown coroutine. The countdown coroutine lives in `session.py` parameterised by a tick callback registered from `bot.py`. Tick interval: 1s internally (for state-machine fidelity); the message edit fires only every **10s** per Spec § "UI Surface — Edit cadence rules." On `discord.HTTPException` 429: exponential backoff with floor of 10s. Skip an edit if the previous one is still in flight. Active timer message format per Spec § "Visual fidelity tier (MVP)": `🍵 Intention: <…>  ⏳ <mm>:<ss>`. While `status='active'`, in-channel `/teamode` re-invocations are refused via the existing guard (Task 2.1's registry check) — verify this works end-to-end.
 * **Dependencies:** Task 3.1, Task 3.2.
@@ -251,7 +251,7 @@ style T6_2 fill:#7B9D6F,color:#000
 ### Task 4.1: Reverie playback at zero + voice disconnect - Core
 
 * **Objective:** When the countdown reaches zero, play reverie and disconnect from voice; surface playback failure for the @-mention fallback.
-* **Output:** `teamode/voice.py` extended with `play_reverie_then_disconnect()`; `tests/test_voice.py` extended.
+* **Output:** `app/voice.py` extended with `play_reverie_then_disconnect()`; `tests/test_voice.py` extended.
 * **Validation:** Tests cover the playback-success path (play called, then disconnect called), and the playback-failure path (play raises, exception propagates, disconnect still called). Smoke test confirms reverie audibly plays in a real session at zero.
 * **Guidance:** Add `play_reverie_then_disconnect(voice_client) -> bool` returning `True` if playback succeeded, `False` if it raised (the bool drives the @-mention fallback decision in Task 4.2). Disconnect happens regardless of play success — bot doesn't camp in voice after the timer. Use `voice_client.play(audio, after=callback)` to wait for playback completion before disconnecting; an `asyncio.Event` set in the `after` callback is the conventional pattern.
 * **Dependencies:** Task 3.1, Task 3.3.
@@ -263,7 +263,7 @@ style T6_2 fill:#7B9D6F,color:#000
 ### Task 4.2: End-of-session embed + follow-up flow + participant prompt + reactions + timeout - Discord
 
 * **Objective:** At zero, post the end-of-session embed, participant follow-up prompt, trigger reverie, @-mention facilitator, post the follow-up button row, accept reactions, handle Y/N answers (with optional "why"), 3-minute timeout, and "end early" button.
-* **Output:** `teamode/bot.py` extended; `tests/test_bot_followup.py`.
+* **Output:** `app/bot.py` extended; `tests/test_bot_followup.py`.
 * **Validation:** Tests cover Y / N (with "why" modal) / 3-min timeout / end-early branches. Participant follow-up prompt content matches Spec. Reaction handler logs reactions but does not affect `completed_intention`. Full end-to-end smoke test confirms happy path.
 * **Guidance:** At countdown zero, sequence per Spec § "Session Lifecycle — Sequence of bot actions": (1) post end-of-session embed (steeping forest `#3F5E4A` accent, 🍵🌿✨ flourish); (2) post participant follow-up prompt: "Everyone — share how the session went, in chat or voice." per Spec § "Participant flow"; (3) trigger `voice.play_reverie_then_disconnect()` from Task 4.1 — if it returns False, post a fallback @-mention text "Time's up, @Facilitator!" to leverage Discord notifications; (4) post the @-mention regardless (notification trigger); (5) post the follow-up button row with two buttons: `[Yes]` and `[No]`, plus an `[End Early]` button (facilitator only). Reactions: the message accepts 👍/👎 reactions from anyone; a reaction handler logs them via console only — they do not affect state. Y click: `session.mark_completed(...)` with `completed_intention=True`. N click: open a follow-up `Modal` for the "why" text; on submit, `session.mark_completed(...)` with `completed_intention=False, followup_note=<text>`. End Early click (facilitator only, ephemeral refusal otherwise): close the window without recording an answer — `session.mark_completed(...)` with `completed_intention=NULL`. 3-minute timeout watchdog: if no facilitator action in 3 minutes, `session.mark_followup_timeout(...)`. All terminal transitions write `ended_at` per Spec.
 * **Dependencies:** Task 4.1, Task 3.3.

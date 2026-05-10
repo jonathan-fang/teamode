@@ -21,7 +21,7 @@ pick → intention → countdown → reverie ring → follow-up.
 ```
 teamode/                      ← repo root
 ├── teamode.py                ← entry point (thin)
-├── teamode/                  ← package
+├── app/                      ← package
 │   ├── __init__.py
 │   ├── bot.py                ← discord.Client + slash command registration
 │   ├── session.py            ← session state machine
@@ -45,22 +45,22 @@ product source.
 
 **`teamode.py`** — entry-point. Loads env vars (`DISCORD_BOT_TOKEN`,
 `TEAMODE_DB_PATH`), constructs the bot, runs the event loop. Imports
-all logic from `teamode.bot`.
+all logic from `app.bot`.
 
-**`teamode/bot.py`** — discord.py `Client` + slash command tree.
+**`app/bot.py`** — discord.py `Client` + slash command tree.
 Registers `/teamode`, dispatches button/modal interactions to
 `session.py`. The Discord-facing layer.
 
-**`teamode/session.py`** — Session state machine. Pure logic, no
+**`app/session.py`** — Session state machine. Pure logic, no
 discord.py imports beyond `Interaction` typing. State transitions:
 `pending` → `intention_set` → `active` → `followup` → terminal
 (`completed` / `followup_timeout` / `cancelled` / `crashed`). Imported
 by tests directly without a live bot.
 
-**`teamode/voice.py`** — Voice connect, `FFmpegPCMAudio` playback of
+**`app/voice.py`** — Voice connect, `FFmpegPCMAudio` playback of
 `assets/reverie.wav`, disconnect. Single source of truth for voice.
 
-**`teamode/db.py`** — SQLite schema, connection pool, write helpers.
+**`app/db.py`** — SQLite schema, connection pool, write helpers.
 See `docs/sqlite-schema.md` for the schema reference.
 
 ### Data Stores
@@ -74,10 +74,10 @@ See `docs/sqlite-schema.md` for the schema reference.
 | File | Purpose |
 |---|---|
 | `teamode.py` | Entry point — `python3 teamode.py` |
-| `teamode/bot.py` | Discord-facing layer, slash command + interaction routing |
-| `teamode/session.py` | Session state machine (testable without Discord) |
-| `teamode/voice.py` | Voice connection + reverie playback |
-| `teamode/db.py` | SQLite schema and writes |
+| `app/bot.py` | Discord-facing layer, slash command + interaction routing |
+| `app/session.py` | Session state machine (testable without Discord) |
+| `app/voice.py` | Voice connection + reverie playback |
+| `app/db.py` | SQLite schema and writes |
 | `assets/reverie.wav` | End-of-session ring |
 | `docs/discord-platform-notes.md` | Discord API reference for slash, components, voice |
 | `docs/sqlite-schema.md` | Field-by-field schema reference with citations |
@@ -214,8 +214,8 @@ APM_RULES {
 
 - For all code changes, run the full validation pipeline. Blocking
   checks must pass clean before requesting commit approval:
-  1. `ruff format --check teamode/ teamode.py tests/`
-  2. `ruff check teamode/ teamode.py tests/`
+  1. `ruff format --check app/ teamode.py tests/`
+  2. `ruff check app/ teamode.py tests/`
   3. `.venv/bin/python -m pytest tests/`
   4. `pyright`
   5. `.LLMAO/scan_injection.sh .apm`

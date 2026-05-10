@@ -1,6 +1,6 @@
 ---
 title: TeaMode
-modified: Spec creation by the Planner.
+modified: Spec creation by the Planner. Manager renamed package teamode/ → app/ before Stage 1 dispatch.
 ---
 
 # APM Spec
@@ -48,7 +48,7 @@ The repository already contains:
 > - Greenfield repo: no source code yet. The Manager has latitude on
 >   file/module layout within the conventions in
 >   `.project-meta/conventions.md`. AGENTS.md suggests
->   `teamode.py` (entry) + `teamode/` package with `bot.py`,
+>   `teamode.py` (entry) + `app/` package with `bot.py`,
 >   `session.py`, `voice.py`, `db.py` — the Manager may reshape if
 >   implementation reveals a better split.
 > - Sibling repos `dlqa` and `dawa` are read-only references useful
