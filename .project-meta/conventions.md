@@ -335,6 +335,15 @@ hypotheses only after the evidence pile is large enough. Cheap models
 speculate from partial code reading and produce plausible-but-wrong
 hypotheses.
 
+### APM agent assignments
+
+- **APM Manager** (coordination, dispatch, review, planning-doc edits):
+  Opus or Sonnet.
+- **APM Worker** (`apm-worker` subagent — implements code, runs
+  validation): Sonnet.
+- **APM research/exploration subagents** (Explore agent for codebase
+  mapping, debug investigation): Haiku.
+
 ---
 
 ## Ad-Hoc Session Workflow (LLM-Assisted)
