@@ -189,7 +189,9 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         # --- Schedule countdown, then run the full end-of-session sequence ---
         session_id = self._session_id
         # Capture the channel reference for the end-of-session messages.
-        channel = interaction.channel
+        # interaction.channel is a VoiceChannel here (enforced by the
+        # /teamode guard), which is Messageable. Cast to satisfy pyright.
+        channel = cast(discord.abc.Messageable | None, interaction.channel)
 
         async def _run_and_followup() -> None:
             await session_module.run_countdown(
