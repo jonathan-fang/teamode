@@ -102,16 +102,17 @@ deferred:
   in `AGENTS.md`, `.apm/plan.md`, `.apm/spec.md`. Defer until a real
   second integration creates the ambiguity.
 
-### v1.x — intention modal flexibility
+### v1.x — ffmpeg startup probe
 
-- **Allow empty modal submission.** Spec § `intention` already says
-  "Empty string allowed (intention is optional in the flow)" but
-  T3.2's worker shipped `required=True`. Flip to `required=False` and
-  handle the empty case in `_ACTIVE_TIMER_FMT` — proposed fallback
-  display: `🍵 Facilitator's Intention: (none)\n<duration> min session\n⏳ MM:SS`,
-  or `🍵 Focus session\n<duration> min session\n⏳ MM:SS`. Pick one
-  before merging. Some facilitators prefer to speak their intention
-  rather than type it.
+- **Warn when ffmpeg is missing.** At bot startup, run
+  `shutil.which("ffmpeg")`; if `None`, emit a WARNING log line:
+  `"ffmpeg not found on PATH — reverie playback will fail. Install ffmpeg before starting a session."`
+  Non-fatal — the bot still starts. Also add a setup-step note in the
+  README's Requirements section pointing to the install line.
+  Rationale: caught the hard way during T4.2 smoke testing — without
+  ffmpeg, `FFmpegPCMAudio` raises and the helper short-circuits to
+  disconnect, so the Reflect embed posts immediately and the bot
+  appears to skip reverie silently.
 
 ### v1.x — countdown wrap-up message
 
