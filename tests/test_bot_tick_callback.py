@@ -181,7 +181,7 @@ async def test_edit_content_format(bot: TeaModeBot, registry: SessionRegistry) -
     await bot._on_countdown_tick(session_id, seconds_remaining=30)
 
     fake_msg.edit.assert_called_once_with(
-        content="🍵 Intention: test intention  ⏳ 00:30"
+        content="🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:30"
     )
 
 
@@ -195,5 +195,5 @@ async def test_edit_at_zero_sends_final_format(
     await bot._on_countdown_tick(session_id, seconds_remaining=0)
 
     fake_msg.edit.assert_called_once_with(
-        content="🍵 Intention: test intention  ⏳ 00:00"
+        content="🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:00"
     )

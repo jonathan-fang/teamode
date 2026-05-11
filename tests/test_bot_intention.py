@@ -286,7 +286,7 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     # Active timer message posted second via followup (wait=True for message handle).
     second_call = inter.followup.send.call_args_list[1]
     expected_initial = _ACTIVE_TIMER_FMT.format(
-        intention="finish the changelog", mm=25, ss=0
+        intention="finish the changelog", duration=25, mm=25, ss=0
     )
     assert second_call.args == (expected_initial,)
     assert second_call.kwargs.get("ephemeral") is False

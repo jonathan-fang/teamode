@@ -45,13 +45,13 @@ _MSG_SESSION_ACTIVE = (
 _MSG_NOT_FACILITATOR = "Only the facilitator can answer."
 
 # Verbatim from Spec § "Participant flow".
-_MSG_PARTICIPANT_PROMPT = "🥅 [Set Intention] Please share your intention for this session in voice or type it in the chat."
+_MSG_PARTICIPANT_PROMPT = "🥅 **[Set Intention]** Please share your intention for this session in voice or type it in the chat."
 
 # Voice connect failure — ephemeral, short, clear.
 _MSG_VOICE_CONNECT_FAILED = "Could not join voice — session cancelled."
 
 # Active timer message format (two spaces between intention and timer per Spec).
-_ACTIVE_TIMER_FMT = "🍵 Intention: {intention}  ⏳ {mm:02d}:{ss:02d}"
+_ACTIVE_TIMER_FMT = "🍵 Facilitator's Intention: {intention}\n{duration} min session\n⏳ {mm:02d}:{ss:02d}"
 
 # Edit cadence per UI-ADR § "Timer edit cadence".
 _EDIT_INTERVAL_SECONDS = 10
@@ -157,6 +157,7 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         assert session.duration_minutes is not None
         initial_content = _ACTIVE_TIMER_FMT.format(
             intention=session.intention,
+            duration=session.duration_minutes,
             mm=session.duration_minutes,
             ss=0,
         )
@@ -362,6 +363,7 @@ class TeaModeBot:
             mm, ss = divmod(seconds_remaining, 60)
             content = _ACTIVE_TIMER_FMT.format(
                 intention=session.intention,
+                duration=session.duration_minutes,
                 mm=mm,
                 ss=ss,
             )
