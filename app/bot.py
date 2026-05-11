@@ -14,7 +14,7 @@ from discord import app_commands
 from app import voice
 from app.config import TEAMODE_DEV_GUILD_ID
 from app import session as session_module
-from app.session import SessionRegistry
+from app.session import InvalidTransition, SessionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,23 @@ _EDIT_INTERVAL_SECONDS = 10
 # Backoff limits for 429 handling.
 _BACKOFF_FLOOR_DEFAULT = 10.0
 _BACKOFF_FLOOR_CAP = 60.0
+
+# End-of-session embed — canonical from UI-ADR § "End-of-session embed copy".
+_END_EMBED_TITLE = "✨ Session complete!"
+_END_EMBED_BODY = "🌿 Sip your tea, stretch, and notice your progress."
+
+# Second participant prompt — verbatim from Spec § "Participant flow".
+_MSG_REFLECT_PROMPT = (
+    "🌿 **[Reflect]** Share how your session went in voice or type it in the chat."
+)
+
+# Follow-up button labels.
+_BTN_LABEL_YES = "Yes"
+_BTN_LABEL_NO = "No"
+_BTN_LABEL_END_EARLY = "End early"
+
+# Follow-up timeout per Spec § "Edge Cases" (3-minute watchdog).
+_FOLLOWUP_TIMEOUT_SECONDS = 180
 
 
 def _format_timer(seconds_remaining: int) -> str:
@@ -169,8 +186,10 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         # Stash edit state so the tick callback can reach it.
         self._bot._edit_states[self._session_id] = _EditState(message=timer_message)
 
-        # --- Schedule countdown, then mark followup when it completes ---
+        # --- Schedule countdown, then run the full end-of-session sequence ---
         session_id = self._session_id
+        # Capture the channel reference for the end-of-session messages.
+        channel = interaction.channel
 
         async def _run_and_followup() -> None:
             await session_module.run_countdown(
@@ -178,11 +197,73 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
                 on_tick=lambda s: self._bot._on_countdown_tick(session_id, s),
             )
             self._bot._registry.mark_followup(session_id=session_id)
-            # Clean up edit state; Stage 4 will handle the end-of-session surface.
+            # Clean up edit state.
             self._bot._edit_states.pop(session_id, None)
-            await voice_client.disconnect()  # type: ignore[misc]
+            # Run the full end-of-session sequence.
+            await self._bot._run_end_of_session(
+                session_id=session_id,
+                voice_client=voice_client,
+                channel=channel,
+            )
 
         asyncio.create_task(_run_and_followup())
+
+
+# ---------------------------------------------------------------------------
+# WhyModal
+# ---------------------------------------------------------------------------
+
+
+class WhyModal(discord.ui.Modal, title="Why didn't you complete your intention?"):
+    """Modal that captures the facilitator's reason for not completing an intention.
+
+    Opened after a 'No' follow-up button click. On submit, records the reason
+    via the registry and disables the follow-up buttons.
+    """
+
+    why_field: discord.ui.Label = discord.ui.Label(
+        text="What got in the way?",
+        component=discord.ui.TextInput(
+            style=discord.TextStyle.long,
+            max_length=4000,
+            required=False,
+        ),
+    )
+
+    def __init__(
+        self,
+        *,
+        bot: "TeaModeBot",
+        session_id: int,
+        followup_message: discord.Message,
+        watchdog_task: asyncio.Task[None],
+    ) -> None:
+        super().__init__()
+        self._bot = bot
+        self._session_id = session_id
+        self._followup_message = followup_message
+        self._watchdog_task = watchdog_task
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        text_input = cast(
+            discord.ui.TextInput[discord.ui.Modal], self.why_field.component
+        )
+        note = text_input.value or None
+
+        # Cancel the watchdog — facilitator has answered.
+        self._watchdog_task.cancel()
+
+        self._bot._registry.mark_completed(
+            session_id=self._session_id,
+            completed_intention=0,
+            followup_note=note,
+        )
+        await interaction.response.send_message(
+            content="Thanks — recorded.", ephemeral=True
+        )
+        # Disable the follow-up buttons.
+        disabled_view = discord.ui.View()
+        await self._followup_message.edit(view=disabled_view)
 
 
 # ---------------------------------------------------------------------------
@@ -209,9 +290,22 @@ class TeaModeBot:
         # Populated when an active timer message is posted; removed on followup.
         self._edit_states: dict[int, _EditState] = {}
 
+        # Per-session watchdog tasks for the 3-minute follow-up timeout.
+        # Keyed by session_id; cancelled on facilitator click.
+        self._watchdog_tasks: dict[int, asyncio.Task[None]] = {}
+
+        # Per-session follow-up message handles; needed to disable buttons
+        # after a click or when the watchdog fires.
+        self._followup_messages: dict[int, discord.Message] = {}
+
+        # Set of follow-up message ids for the reaction listener filter.
+        self._followup_message_ids: set[int] = set()
+
         intents = discord.Intents.default()
         intents.guilds = True
         intents.voice_states = True
+        # reactions intent: required to receive on_raw_reaction_add events.
+        intents.reactions = True
 
         self.client = discord.Client(intents=intents)
         self.tree = app_commands.CommandTree(self.client)
@@ -219,6 +313,7 @@ class TeaModeBot:
         # Wire event handlers.
         self.client.event(self.on_ready)
         self.client.event(self.on_interaction)
+        self.client.event(self.on_raw_reaction_add)
 
         # Register the slash command on this instance.
         self._register_command()
@@ -278,7 +373,9 @@ class TeaModeBot:
 
         if purpose == "timer":
             await self._handle_timer_pick(interaction, session_id, parts)
-        # Future purposes (followup, etc.) get their own branch here.
+        elif purpose == "followup":
+            action = parts[3] if len(parts) > 3 else ""
+            await self._handle_followup_click(interaction, session_id, action)
 
     async def _handle_timer_pick(
         self,
@@ -325,6 +422,225 @@ class TeaModeBot:
             voice_channel=interaction.channel,
         )
         await interaction.response.send_modal(modal)
+
+    async def _run_end_of_session(
+        self,
+        *,
+        session_id: int,
+        voice_client: discord.VoiceClient,
+        channel: discord.abc.Messageable | None,
+    ) -> None:
+        """Run the full end-of-session sequence after countdown reaches zero.
+
+        Order: end-of-session embed → reflect prompt → reverie+disconnect
+        → @-mention → follow-up button row → 3-minute watchdog.
+        """
+        if channel is None:
+            logger.warning(
+                "No channel reference for session %s end-of-session sequence",
+                session_id,
+            )
+            return
+
+        # Step a: End-of-session embed.
+        embed = discord.Embed(
+            title=_END_EMBED_TITLE,
+            description=_END_EMBED_BODY,
+            color=COLORS["end_of_session"],
+        )
+        await channel.send(embed=embed)
+
+        # Step b: Reflect prompt (plain text, verbatim from Spec).
+        await channel.send(_MSG_REFLECT_PROMPT)
+
+        # Step c: Reverie playback + disconnect.
+        playback_ok = await voice.play_reverie_then_disconnect(voice_client)
+        if not playback_ok:
+            logger.warning("Reverie playback failed for session %s", session_id)
+
+        # Step d: @-mention all current voice channel members (snapshot at this moment).
+        voice_channel = voice_client.channel
+        if isinstance(voice_channel, discord.VoiceChannel):
+            members = [m for m in voice_channel.members if not m.bot]
+        else:
+            members = []
+
+        if members:
+            mentions = " ".join(m.mention for m in members)
+            mention_text = f"Time's up, {mentions}!"
+        else:
+            mention_text = "Time's up!"
+        await channel.send(mention_text)
+
+        # Step e: Follow-up button row.
+        view = _build_followup_view(session_id)
+        followup_msg = await channel.send(view=view)
+
+        # Stash the message handle for later button-disabling.
+        self._followup_messages[session_id] = followup_msg
+        self._followup_message_ids.add(followup_msg.id)
+
+        # Step f: 3-minute watchdog.
+        async def _watchdog() -> None:
+            try:
+                await asyncio.sleep(_FOLLOWUP_TIMEOUT_SECONDS)
+            except asyncio.CancelledError:
+                return
+            # Watchdog fired — mark timeout and disable buttons.
+            try:
+                self._registry.mark_followup_timeout(session_id=session_id)
+            except Exception:
+                logger.exception(
+                    "mark_followup_timeout failed for session %s", session_id
+                )
+            msg = self._followup_messages.pop(session_id, None)
+            self._followup_message_ids.discard(followup_msg.id)
+            if msg is not None:
+                try:
+                    await msg.edit(view=discord.ui.View())
+                except Exception:
+                    logger.warning(
+                        "Could not disable follow-up buttons for session %s", session_id
+                    )
+            try:
+                await channel.send("🌿 Follow-up window closed.")
+            except Exception:
+                logger.warning(
+                    "Could not post follow-up-closed message for session %s", session_id
+                )
+
+        task: asyncio.Task[None] = asyncio.create_task(_watchdog())
+        self._watchdog_tasks[session_id] = task
+
+    async def _handle_followup_click(
+        self,
+        interaction: discord.Interaction,
+        session_id: int,
+        action: str,
+    ) -> None:
+        """Handle a follow-up button click (yes / no / end)."""
+        session = self._registry.get(session_id)
+        if session is None:
+            embed = discord.Embed(
+                description="This session is no longer active.",
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Facilitator-only authorization check.
+        if str(interaction.user.id) != session.facilitator_id:
+            embed = discord.Embed(
+                description=_MSG_NOT_FACILITATOR,
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        if action == "yes":
+            await self._followup_yes(interaction, session_id)
+        elif action == "no":
+            await self._followup_no(interaction, session_id)
+        elif action == "end":
+            await self._followup_end(interaction, session_id)
+
+    async def _followup_yes(
+        self, interaction: discord.Interaction, session_id: int
+    ) -> None:
+        """Handle the 'Yes' follow-up answer."""
+        self._cancel_watchdog(session_id)
+        try:
+            self._registry.mark_completed(
+                session_id=session_id,
+                completed_intention=1,
+                followup_note=None,
+            )
+        except InvalidTransition:
+            await interaction.response.send_message(
+                content="Session already ended.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(content="Recorded.", ephemeral=True)
+        await self._disable_followup_buttons(session_id)
+
+    async def _followup_no(
+        self, interaction: discord.Interaction, session_id: int
+    ) -> None:
+        """Handle the 'No' follow-up answer — opens the WhyModal."""
+        followup_msg = self._followup_messages.get(session_id)
+        watchdog_task = self._watchdog_tasks.get(session_id)
+        if followup_msg is None or watchdog_task is None:
+            await interaction.response.send_message(
+                content="Session already ended.", ephemeral=True
+            )
+            return
+        modal = WhyModal(
+            bot=self,
+            session_id=session_id,
+            followup_message=followup_msg,
+            watchdog_task=watchdog_task,
+        )
+        await interaction.response.send_modal(modal)
+
+    async def _followup_end(
+        self, interaction: discord.Interaction, session_id: int
+    ) -> None:
+        """Handle the 'End early' follow-up answer."""
+        self._cancel_watchdog(session_id)
+        try:
+            self._registry.mark_completed(
+                session_id=session_id,
+                completed_intention=None,  # type: ignore[arg-type]
+                followup_note=None,
+            )
+        except InvalidTransition:
+            await interaction.response.send_message(
+                content="Session already ended.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(content="Recorded.", ephemeral=True)
+        await self._disable_followup_buttons(session_id)
+
+    def _cancel_watchdog(self, session_id: int) -> None:
+        """Cancel the follow-up watchdog task for *session_id* if it exists."""
+        task = self._watchdog_tasks.pop(session_id, None)
+        if task is not None:
+            task.cancel()
+
+    async def _disable_followup_buttons(self, session_id: int) -> None:
+        """Edit the follow-up message to remove the button row."""
+        msg = self._followup_messages.pop(session_id, None)
+        if msg is not None:
+            self._followup_message_ids.discard(msg.id)
+            try:
+                await msg.edit(view=discord.ui.View())
+            except Exception:
+                logger.warning(
+                    "Could not disable follow-up buttons for session %s", session_id
+                )
+
+    async def on_raw_reaction_add(
+        self, payload: discord.RawReactionActionEvent
+    ) -> None:
+        """Log thumbs-up / thumbs-down reactions on follow-up messages.
+
+        No state is written; no message is sent. Reactions are a social signal
+        only — the facilitator's Y/N click is the authoritative answer.
+        """
+        # Only track reactions on follow-up messages.
+        if payload.message_id not in self._followup_message_ids:
+            return
+
+        emoji_name = str(payload.emoji)
+        if emoji_name not in ("👍", "👎"):
+            return
+
+        logger.info(
+            "Reaction %s on follow-up message %s by user %s",
+            emoji_name,
+            payload.message_id,
+            payload.user_id,
+        )
 
     async def _on_countdown_tick(self, session_id: int, seconds_remaining: int) -> None:
         """Tick callback injected into ``run_countdown``.
@@ -510,6 +826,36 @@ def _build_welcome_embed() -> discord.Embed:
         color=COLORS["active"],
     )
     return embed
+
+
+def _build_followup_view(session_id: int) -> discord.ui.View:
+    """Build the Yes / No / End early follow-up button row for *session_id*.
+
+    Custom_ids follow UI-ADR § "Custom_id namespace":
+    ``teamode:<session_id>:followup:<action>``.
+
+    Button styles: Yes=success (green), No=danger (red), End early=secondary.
+    """
+    view = discord.ui.View()
+    yes_button: discord.ui.Button[discord.ui.View] = discord.ui.Button(
+        label=_BTN_LABEL_YES,
+        custom_id=f"teamode:{session_id}:followup:yes",
+        style=discord.ButtonStyle.success,
+    )
+    no_button: discord.ui.Button[discord.ui.View] = discord.ui.Button(
+        label=_BTN_LABEL_NO,
+        custom_id=f"teamode:{session_id}:followup:no",
+        style=discord.ButtonStyle.danger,
+    )
+    end_button: discord.ui.Button[discord.ui.View] = discord.ui.Button(
+        label=_BTN_LABEL_END_EARLY,
+        custom_id=f"teamode:{session_id}:followup:end",
+        style=discord.ButtonStyle.secondary,
+    )
+    view.add_item(yes_button)
+    view.add_item(no_button)
+    view.add_item(end_button)
+    return view
 
 
 def _build_timer_view(session_id: int) -> discord.ui.View:
