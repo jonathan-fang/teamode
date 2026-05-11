@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from typing import cast
 
 import discord
 from discord import app_commands
@@ -36,6 +37,55 @@ _MSG_SESSION_ACTIVE = (
     " — please pick another text channel."
 )
 
+# Verbatim from UI-ADR § "Authorization rules".
+_MSG_NOT_FACILITATOR = "Only the facilitator can answer."
+
+# Verbatim from Spec § "Participant flow".
+_MSG_PARTICIPANT_PROMPT = (
+    "Everyone — type your intention in chat or share it in voice. Take a minute."
+)
+
+
+# ---------------------------------------------------------------------------
+# IntentionModal
+# ---------------------------------------------------------------------------
+
+
+class IntentionModal(discord.ui.Modal, title="Set your intention"):
+    """Modal that captures the facilitator's session intention.
+
+    Opened after a timer-pick button click.  On submit, records the
+    intention via the registry and posts the public participant prompt.
+    """
+
+    intention_field: discord.ui.Label = discord.ui.Label(
+        text="What will you focus on?",
+        component=discord.ui.TextInput(
+            style=discord.TextStyle.long,
+            max_length=4000,
+            required=True,
+        ),
+    )
+
+    def __init__(self, *, bot: TeaModeBot, session_id: int) -> None:
+        super().__init__()
+        self._bot = bot
+        self._session_id = session_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        text_input = cast(
+            discord.ui.TextInput[discord.ui.Modal], self.intention_field.component
+        )
+        intention_text = text_input.value or ""
+        self._bot._registry.set_intention(
+            session_id=self._session_id,
+            intention=intention_text,
+        )
+        # Acknowledge the modal interaction without cluttering the channel.
+        await interaction.response.defer(ephemeral=True)
+        # Post the participant prompt publicly in the session's text channel.
+        await interaction.channel.send(_MSG_PARTICIPANT_PROMPT)  # type: ignore[union-attr]
+
 
 # ---------------------------------------------------------------------------
 # TeaModeBot
@@ -66,6 +116,7 @@ class TeaModeBot:
 
         # Wire event handlers.
         self.client.event(self.on_ready)
+        self.client.event(self.on_interaction)
 
         # Register the slash command on this instance.
         self._register_command()
@@ -92,6 +143,78 @@ class TeaModeBot:
                 "Set TEAMODE_DEV_GUILD_ID to your dev guild id for instant "
                 "command propagation."
             )
+
+    async def on_interaction(self, interaction: discord.Interaction) -> None:
+        """Route component interactions (button clicks, select menus, etc.).
+
+        Dispatch structure: parse ``custom_id`` → route by purpose segment.
+        Adding a new purpose (e.g. ``followup``) requires only a new branch
+        in the ``if purpose == ...`` block below — the parse logic is shared.
+
+        Application-command interactions are forwarded to the command tree
+        instead of being handled here.
+        """
+        # Application commands are handled by the CommandTree before this
+        # on_interaction callback fires; no forwarding needed here.
+        if interaction.type != discord.InteractionType.component:
+            return
+
+        custom_id: str = interaction.data.get("custom_id", "")  # type: ignore[union-attr]
+        parts = custom_id.split(":")
+
+        # Ignore non-teamode custom_ids (other bots, earlier code, etc.).
+        if len(parts) < 3 or parts[0] != "teamode":
+            return
+
+        # Parse session_id — must be a valid integer.
+        try:
+            session_id = int(parts[1])
+        except ValueError:
+            return
+
+        purpose = parts[2]
+
+        if purpose == "timer":
+            await self._handle_timer_pick(interaction, session_id, parts)
+        # Future purposes (followup, etc.) get their own branch here.
+
+    async def _handle_timer_pick(
+        self,
+        interaction: discord.Interaction,
+        session_id: int,
+        parts: list[str],
+    ) -> None:
+        """Handle a timer-pick button click."""
+        session = self._registry.get(session_id)
+        if session is None:
+            embed = discord.Embed(
+                description="This session is no longer active.",
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        if str(interaction.user.id) != session.facilitator_id:
+            embed = discord.Embed(
+                description=_MSG_NOT_FACILITATOR,
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Parse the duration value from the custom_id.
+        try:
+            duration_minutes = int(parts[3])
+        except (IndexError, ValueError):
+            logger.warning("Malformed timer custom_id: %r", ":".join(parts))
+            return
+
+        self._registry.set_duration(
+            session_id=session_id,
+            duration_minutes=duration_minutes,
+        )
+        modal = IntentionModal(bot=self, session_id=session_id)
+        await interaction.response.send_modal(modal)
 
     # ------------------------------------------------------------------
     # Command registration
