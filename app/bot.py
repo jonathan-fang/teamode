@@ -65,7 +65,7 @@ class TeaModeBot:
         self.tree = app_commands.CommandTree(self.client)
 
         # Wire event handlers.
-        self.client.event(self._on_ready)
+        self.client.event(self.on_ready)
 
         # Register the slash command on this instance.
         self._register_command()
@@ -74,7 +74,7 @@ class TeaModeBot:
     # Event handlers
     # ------------------------------------------------------------------
 
-    async def _on_ready(self) -> None:
+    async def on_ready(self) -> None:
         logger.info(
             "Logged in as %s (id=%s)",
             self.client.user,
