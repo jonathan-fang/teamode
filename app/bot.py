@@ -46,7 +46,7 @@ _MSG_NOT_FACILITATOR = "Only the facilitator can answer."
 
 # Verbatim from Spec § "Participant flow".
 _MSG_PARTICIPANT_PROMPT = (
-    "Everyone — type your intention in chat or share it in voice. Take a minute."
+    "🥅 [Set Intention] Please share your intention for this session in voice or type it in the chat."
 )
 
 # Voice connect failure — ephemeral, short, clear.
@@ -482,7 +482,7 @@ def _build_welcome_embed() -> discord.Embed:
     facilitator and prompts tea / desk / distractions check.
     """
     embed = discord.Embed(
-        title="🍵 TeaMode",
+        title="🍵 Now Entering TeaMode",
         description=(
             "Time for TeaMode!\n"
             "· Grab your tea (or water/beverage of your choice),\n"
