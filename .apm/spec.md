@@ -1,6 +1,6 @@
 ---
 title: TeaMode
-modified: Spec creation by the Planner. Manager renamed package teamode/ → app/ before Stage 1 dispatch. User refreshed first participant prompt copy during Stage 3 smoke test. User refreshed second participant prompt + end-of-session embed copy + broadened @-mention from facilitator-only to all voice members at end-tick before T4.2 dispatch. User redesigned end-of-session: dropped Y/N/End-early buttons, facilitator's ✅/⛔ reaction now authoritative for `completed_intention`, public "why" prompt on ⛔ (no chat capture) — before T4.2 follow-up dispatch.
+modified: Spec creation by the Planner. Manager renamed package teamode/ → app/ before Stage 1 dispatch. User refreshed first participant prompt copy during Stage 3 smoke test. User refreshed second participant prompt + end-of-session embed copy + broadened @-mention from facilitator-only to all voice members at end-tick before T4.2 dispatch. User redesigned end-of-session: dropped Y/N/End-early buttons, facilitator's ✅/⛔ reaction now authoritative for `completed_intention`, public "why" prompt on ⛔ (no chat capture) — before T4.2 follow-up dispatch. Pre-merge T4.2 scope bundle: added 5-min timer option (durations now 5/10/25/50), reordered participant prompt to fire 1s post-welcome with @-mentions of current voice members, intention modal now accepts empty submission (active-timer collapses to "🍵 No intention set"), Session-complete body rendered as `## …` heading.
 ---
 
 # APM Spec
@@ -164,12 +164,12 @@ state survives a process restart.
   └─ guard checks pass
        └─ INSERT row (status='pending')
             └─ post welcome embed + timer-pick button row
-                 └─ facilitator clicks [10|25|50]
-                      └─ open intention modal
-                           └─ facilitator submits modal
-                                └─ UPDATE row (intention, duration_minutes)
-                                     └─ post participant intention prompt
-                                        ("Everyone — share your intention in chat or voice")
+                 └─ 1s delay
+                 └─ post participant intention prompt (@-mention all voice members, [Set Intention])
+                      └─ facilitator clicks [5|10|25|50]
+                           └─ open intention modal (intention may be blank — required=False)
+                                └─ facilitator submits modal
+                                     └─ UPDATE row (intention nullable, duration_minutes)
                                           └─ bot joins voice channel
                                                └─ UPDATE row (started_at, status='active')
                                                     └─ post active timer message
@@ -224,7 +224,7 @@ during the session:
 
 | When | Prompt |
 |---|---|
-| Right after the facilitator submits their intention modal, before the timer starts | "🥅 **[Set Intention]** Please share your intention for this session in voice or type it in the chat." |
+| Right after the welcome embed posts (1-second delay), before the facilitator picks a duration | "🥅 **[Set Intention]** \<@-mentions of current voice members, bot filtered\> Please share your intention for this session in voice or type it in the chat." (mentions omitted only when the voice channel is empty) |
 | Right after the Session-complete embed, before the facilitator's ✅/⛔ reaction | Reflect embed — title `🌿 [Reflect]`, body with bullet list (canonical copy in `.project-meta/UI-ADR.md` § "Reflect embed copy"). Bot pre-populates ✅ and ⛔ reactions. |
 
 The prompts are **plain text messages** in the channel — not embeds,
@@ -279,12 +279,15 @@ Authoritative source: `.project-meta/UI-ADR.md`.
   format every 10 seconds:
 
   ```
-  🍵 Facilitator's Intention: <…>
+  🍵 Facilitator's Intention: <…>      # when intention is non-empty
+  🍵 No intention set                   # when intention is empty or whitespace-only
   <duration> min session
   ⏳ <mm>:<ss>
   ```
 - End-of-session: an embed (steeping forest accent) with the 🍵🌿✨
-  flourish, plus a follow-up button row.
+  flourish; Session-complete body rendered as `## …` heading-style for
+  visual weight. Follow-up state is captured via ✅/⛔ reactions on the
+  Reflect embed (see § "Session Lifecycle").
 - Welcome: a single tidy embed (matcha sage accent) with the timer-pick
   button row inline.
 

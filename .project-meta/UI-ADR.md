@@ -62,7 +62,8 @@ Do not introduce new emoji without updating this section.
 | Surface | Location | Purpose | Interactive |
 |---|---|---|---|
 | Welcome embed | Voice channel's text chat | Greets facilitator, prompts tea/desk/distractions | No (display) |
-| Timer-pick button row | Same message as welcome (or follow-up) | 10 / 25 / 50 minute buttons | Yes — buttons |
+| Timer-pick button row | Same message as welcome (or follow-up) | 5 / 10 / 25 / 50 minute buttons | Yes — buttons |
+| Participant `[Set Intention]` prompt | Voice channel's text chat, plain text | Posted 1s after welcome embed; @-mentions all current voice members (bot filtered) inviting them to share intention | No (display) |
 | Intention modal | Triggered by timer-pick | Free-form text capture | Yes — modal |
 | Active timer embed | Same channel | Cycles `mm:ss` every 10s | No (display only) |
 | Session-complete embed | Same channel | "Session complete!" + @-mentions of voice members; reverie plays in voice | No (display) |
@@ -86,8 +87,8 @@ match this verbatim — do not paraphrase in code.
 > ⏳ **How long would you like to focus today?**
 
 - **Accent color:** `#7B9D6F` (matcha sage).
-- **Buttons (attached to the same message):** `10 min`, `25 min`,
-  `50 min` — secondary style.
+- **Buttons (attached to the same message):** `5 min`, `10 min`,
+  `25 min`, `50 min` — secondary style.
 
 ### End-of-session embed copy (canonical)
 
@@ -96,6 +97,9 @@ output must match this verbatim — do not paraphrase in code.
 
 - **Title:** `✨ Session complete!`
 - **Body:** `🌿 Sip your tea, stretch, and notice your progress.`
+  - Rendered as `## 🌿 Sip your tea, stretch, and notice your progress.`
+    in the embed description — the `##` markdown promotes it to heading
+    weight for visual emphasis.
 - **Accent color:** `#3F5E4A` (steeping forest).
 - **Content (above embed; @-mentions of current voice channel members
   at end-tick, with Ocha filtered out — mentions ping):**
@@ -118,11 +122,16 @@ description.
 Posted right after the Session-complete embed. The bot pre-populates
 ✅ and ⛔ reactions on this message.
 
-- **Content (above embed; facilitator prompt with mention — pings):**
+- **Content (above embed; plain prompt, no mention):**
 
   ```
-  Facilitator <@facilitator_id>! React ✅ if you finished, ⛔ if not.
+  [Follow-up] React ✅ if you finished, ⛔ if not.
   ```
+
+  No facilitator @-mention — the Session-complete message immediately
+  above already @-mentions all voice members (facilitator included),
+  so a second ping would be noise. The `[Follow-up]` prefix is a
+  visual hand-off cue.
 
 - **Embed title:** `🌿 [Reflect]`
 - **Embed body:**
@@ -229,14 +238,22 @@ them, not reconsider them.
   channel.
 - **MVP visual fidelity**: plain text edit cycling `mm:ss`. Embed +
   unicode progress bar is a v2 polish — do not preempt.
-- **Reaction-only follow-up is not authoritative**; the facilitator's
-  Y/N click writes `completed_intention`. Reactions are social signal.
 - **Ephemeral refusals**, not visible-to-channel public ones, when a
   user is unauthorised or invokes during an active session.
 - **Bot joins voice at session start**, not late-join at end. Reverie
   reliability outweighs the small cost of holding a voice connection.
 - **Confetti analogue** at end-of-session: a single message with a
   small 🍵🌿✨ flourish; no animated cycle for MVP.
+- **Timer durations**: `5 / 10 / 25 / 50` min. Reaction-only follow-up
+  redesign superseded the Y/N click model — see § "Authorization rules".
+- **Intention modal accepts empty submissions.** The active-timer first
+  line collapses to `🍵 No intention set` when intention is empty or
+  whitespace-only. Facilitators who prefer to speak rather than type
+  can submit a blank modal.
+- **Participant `[Set Intention]` prompt fires post-welcome** (1-second
+  beat after the welcome embed), not post-modal-submit. This invites
+  participants to share their intention before the timer is picked,
+  paralleling the facilitator's modal.
 
 ---
 
