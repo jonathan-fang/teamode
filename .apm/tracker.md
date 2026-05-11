@@ -14,9 +14,9 @@ title: TeaMode
 
 | Task | Status | Domain | Branch |
 |------|--------|--------|--------|
-| 3.1 | Active | core | feat/voice-plumbing |
-| 3.2 | Active | discord | feat/timer-intention |
-| 3.3 | Waiting: 3.1, 3.2 | discord | |
+| 3.1 | Done | core | |
+| 3.2 | Done | discord | |
+| 3.3 | Active | discord | feat/active-timer-countdown |
 
 ## Version Control
 
@@ -31,4 +31,6 @@ title: TeaMode
 - Dispatch mode: foreground only (User has not configured permissions for background subagents).
 - Holistic verification points flagged by Planner: end of Stages 2, 3, 4, 5, 6 — assess at each Stage close.
 - Worker false-positive note: in Task Prompts, name the package as "`app/`" explicitly. The repo root directory is also named `teamode/` on disk (per AGENTS.md tree diagram), and a worker re-reading AGENTS.md may conflate the two.
+- Parallel-dispatch cost lesson (Stage 3): T3.1 + T3.2 ran in parallel; T3.2's worker engaged with a User mid-dispatch question and never returned a Task Result, requiring a recovery dispatch (~75k extra tokens). Wall-clock savings net-negative once recovery counted. For Stage 5's parallel opportunity (T5.3 + T5.4), default to sequential unless the User specifically wants parallel again.
+- Worker-engagement gotcha: directly messaging an in-flight worker breaks the apm-worker contract ("no User interaction"). Workers will answer the message and may forget to commit/log/return. Route mid-dispatch questions through the Manager instead.
 
