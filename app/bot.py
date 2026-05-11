@@ -45,9 +45,7 @@ _MSG_SESSION_ACTIVE = (
 _MSG_NOT_FACILITATOR = "Only the facilitator can answer."
 
 # Verbatim from Spec § "Participant flow".
-_MSG_PARTICIPANT_PROMPT = (
-    "🥅 [Set Intention] Please share your intention for this session in voice or type it in the chat."
-)
+_MSG_PARTICIPANT_PROMPT = "🥅 [Set Intention] Please share your intention for this session in voice or type it in the chat."
 
 # Voice connect failure — ephemeral, short, clear.
 _MSG_VOICE_CONNECT_FAILED = "Could not join voice — session cancelled."
@@ -108,10 +106,24 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         ),
     )
 
-    def __init__(self, *, bot: TeaModeBot, session_id: int) -> None:
+    def __init__(
+        self,
+        *,
+        bot: TeaModeBot,
+        session_id: int,
+        voice_channel: discord.VoiceChannel,
+    ) -> None:
+        """Initialise the modal.
+
+        *voice_channel* is the resolved ``discord.VoiceChannel`` from the
+        click-handler call site.  Passing it here avoids a REST round-trip
+        (``fetch_channel``) in :meth:`on_submit` and the permission gate that
+        round-trip would cross.
+        """
         super().__init__()
         self._bot = bot
         self._session_id = session_id
+        self._voice_channel = voice_channel
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         text_input = cast(
@@ -130,14 +142,9 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         await interaction.followup.send(_MSG_PARTICIPANT_PROMPT, ephemeral=False)
 
         # --- Connect voice ---
+        # Use the channel resolved at click-handler time — no REST round-trip.
+        voice_channel = self._voice_channel
         try:
-            voice_channel = await self._bot.client.fetch_channel(
-                int(session.voice_channel_id)
-            )
-            if not isinstance(voice_channel, discord.VoiceChannel):
-                raise TypeError(
-                    f"Expected VoiceChannel, got {type(voice_channel).__name__}"
-                )
             voice_client = await voice.connect(voice_channel)
         except Exception:
             logger.exception("Voice connect failed for session %s", self._session_id)
@@ -307,7 +314,15 @@ class TeaModeBot:
             session_id=session_id,
             duration_minutes=duration_minutes,
         )
-        modal = IntentionModal(bot=self, session_id=session_id)
+        # interaction.channel is guaranteed to be a VoiceChannel here — the
+        # /teamode invocation guard (Guard 1 in _handle_teamode) already
+        # enforced it.  The assert satisfies pyright's narrowing requirement.
+        assert isinstance(interaction.channel, discord.VoiceChannel)
+        modal = IntentionModal(
+            bot=self,
+            session_id=session_id,
+            voice_channel=interaction.channel,
+        )
         await interaction.response.send_modal(modal)
 
     async def _on_countdown_tick(self, session_id: int, seconds_remaining: int) -> None:

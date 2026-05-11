@@ -50,11 +50,15 @@ def bot(conn: sqlite3.Connection, registry: SessionRegistry) -> TeaModeBot:
 def _make_component_interaction(
     custom_id: str,
     user_id: int = 111,
+    voice_channel: discord.VoiceChannel | None = None,
 ) -> Any:
     """Build a FakeInteraction that looks like a component (button) click.
 
     ``interaction.data`` carries the custom_id as Discord sends it.
     ``interaction.type`` is set to ``discord.InteractionType.component``.
+    ``voice_channel`` is assigned to ``interaction.channel``; supply a
+    ``MagicMock(spec=discord.VoiceChannel)`` for tests that exercise the
+    timer-pick path, where ``_handle_timer_pick`` now asserts the channel type.
     """
     inter = AsyncMock()
     inter.type = discord.InteractionType.component
@@ -64,6 +68,7 @@ def _make_component_interaction(
     user.id = user_id
     inter.user = user
 
+    inter.channel = voice_channel
     inter.response = AsyncMock()
     return inter
 
@@ -103,7 +108,10 @@ async def test_facilitator_click_sets_duration_and_opens_modal(
     """Facilitator clicking a timer button records the duration and opens the modal."""
     session_id = _seed_session(registry, facilitator_id=111)
     custom_id = f"teamode:{session_id}:timer:25"
-    inter = _make_component_interaction(custom_id, user_id=111)
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    inter = _make_component_interaction(
+        custom_id, user_id=111, voice_channel=fake_voice_channel
+    )
 
     await bot.on_interaction(inter)
 
@@ -210,7 +218,10 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
         registry, facilitator_id=111, duration_minutes=25
     )
 
-    modal = IntentionModal(bot=bot, session_id=session_id)
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    modal = IntentionModal(
+        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
+    )
 
     # Simulate the text-input value that discord.py would populate on submit.
     text_input = cast(
@@ -227,7 +238,6 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     inter.followup = AsyncMock()
     inter.followup.send = AsyncMock(side_effect=[None, fake_timer_msg])
 
-    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
     fake_voice_client = AsyncMock()
 
     def _close_coro(coro: object) -> None:
@@ -237,9 +247,6 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
 
     with (
         patch("app.bot.voice.connect", return_value=fake_voice_client) as mock_connect,
-        patch.object(
-            bot.client, "fetch_channel", return_value=fake_voice_channel
-        ) as mock_fetch,
         patch(
             "app.bot.asyncio.create_task", side_effect=_close_coro
         ) as mock_create_task,
@@ -269,10 +276,8 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     assert first_call.args == (_MSG_PARTICIPANT_PROMPT,)
     assert first_call.kwargs.get("ephemeral") is False
 
-    # Voice channel fetched with the correct id.
-    mock_fetch.assert_called_once_with(444)  # voice_channel_id seeded above
-
-    # voice.connect called with the fetched channel.
+    # voice.connect called with the channel passed at modal-construction time
+    # (no REST fetch_channel call occurs).
     mock_connect.assert_called_once_with(fake_voice_channel)
 
     # Session advanced to ACTIVE.
@@ -305,7 +310,10 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
         registry, facilitator_id=111, duration_minutes=10
     )
 
-    modal = IntentionModal(bot=bot, session_id=session_id)
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    modal = IntentionModal(
+        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
+    )
     text_input = cast(
         discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
     )
@@ -315,10 +323,7 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
     inter.response = AsyncMock()
     inter.followup = AsyncMock()
 
-    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
-
     with (
-        patch.object(bot.client, "fetch_channel", return_value=fake_voice_channel),
         patch("app.bot.voice.connect", side_effect=Exception("no voice")),
         patch("app.bot.asyncio.create_task") as mock_create_task,
     ):
