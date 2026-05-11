@@ -7,9 +7,13 @@ in ``app.bot`` is responsible for turning failures into user-visible
 responses.
 """
 
+import asyncio
+import logging
 from pathlib import Path
 
 import discord
+
+logger = logging.getLogger(__name__)
 
 # Resolved once at import so the same Path object is reused per playback call.
 REVERIE_PATH: Path = (Path(__file__).parent / ".." / "assets" / "reverie.wav").resolve()
@@ -40,3 +44,44 @@ async def disconnect(voice_client: discord.VoiceClient) -> None:
     Propagates any exception raised by discord.py.
     """
     await voice_client.disconnect()
+
+
+async def play_reverie_then_disconnect(voice_client: discord.VoiceClient) -> bool:
+    """Play the reverie chime, wait for it to finish, then disconnect.
+
+    Returns ``True`` if playback completed without error, ``False`` if playback
+    failed (either a synchronous error from ``play()`` or an error reported via
+    the ``after`` callback).  Disconnect is always attempted regardless of
+    playback outcome; a disconnect error is logged at WARNING level and does
+    not affect the returned boolean.
+    """
+    done: asyncio.Event = asyncio.Event()
+    # Use a single-element list so the after callback (running in a separate
+    # thread) can mutate the flag without a nonlocal closure — lists are safe
+    # for cross-thread reads once the event fires.
+    success: list[bool] = [True]
+    loop = voice_client.loop
+
+    def after(error: BaseException | None) -> None:
+        if error is not None:
+            success[0] = False
+        loop.call_soon_threadsafe(done.set)
+
+    play_ok = True
+    try:
+        voice_client.play(discord.FFmpegPCMAudio(str(REVERIE_PATH)), after=after)
+    except Exception:
+        # Synchronous failure (e.g. ffmpeg not on PATH). Skip waiting on the
+        # event — the after callback will never fire.
+        play_ok = False
+        success[0] = False
+
+    if play_ok:
+        await done.wait()
+
+    try:
+        await voice_client.disconnect()
+    except Exception as exc:
+        logger.warning("voice disconnect error after reverie playback: %s", exc)
+
+    return success[0]
