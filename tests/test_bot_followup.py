@@ -1,5 +1,9 @@
-"""Tests for the end-of-session sequence: follow-up buttons, WhyModal, watchdog,
-and reaction listener.
+"""Tests for the reactions-authoritative end-of-session flow.
+
+Covers: post-zero sequence (Session-complete + Reflect embeds, reverie,
+add_reaction), on_raw_reaction_add (facilitator ✅/⛔, non-facilitator,
+bot-own, unrelated emoji, unrelated message), 3-minute watchdog, and
+timer-pick auto-disable.
 
 All Discord gateway calls are mocked via AsyncMock / MagicMock; no live
 gateway is touched.  SQLite uses an in-memory connection backed by the real
@@ -8,7 +12,9 @@ schema (no mocking of the persistence layer).
 
 from __future__ import annotations
 
+import logging
 import sqlite3
+from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,11 +24,8 @@ import pytest
 from app.bot import (
     COLORS,
     TeaModeBot,
-    WhyModal,
     _END_EMBED_BODY,
     _END_EMBED_TITLE,
-    _MSG_NOT_FACILITATOR,
-    _MSG_REFLECT_PROMPT,
 )
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
@@ -55,7 +58,7 @@ def bot(conn: sqlite3.Connection, registry: SessionRegistry) -> TeaModeBot:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers / fake objects
 # ---------------------------------------------------------------------------
 
 
@@ -93,54 +96,79 @@ def _make_voice_client(members: list[Any] | None = None) -> MagicMock:
     return vc
 
 
-def _make_component_interaction(
-    custom_id: str,
-    user_id: int = 111,
-) -> Any:
-    """Build a fake component interaction for button clicks."""
-    inter = AsyncMock()
-    inter.type = discord.InteractionType.component
-    inter.data = {"custom_id": custom_id}
+@dataclass
+class FakeRawReactionActionEvent:
+    """Minimal stand-in for discord.RawReactionActionEvent."""
 
-    user = MagicMock()
-    user.id = user_id
-    inter.user = user
+    user_id: int
+    message_id: int
+    emoji: Any
+    channel_id: int = 333
+    guild_id: int = 222
 
-    inter.response = AsyncMock()
-    return inter
+
+def _make_emoji(text: str) -> MagicMock:
+    """Build a fake emoji whose str() returns *text*."""
+    e = MagicMock()
+    e.__str__ = MagicMock(return_value=text)
+    return e
+
+
+def _install_fake_client_user(bot: TeaModeBot, user_id: int) -> MagicMock:
+    """Replace bot.client with a MagicMock that has .user.id == user_id.
+
+    discord.Client.user is a read-only property so we cannot assign it directly
+    in tests.  Swapping out the whole client object is simpler than patching the
+    property descriptor on the class (which would affect all Client instances in
+    the same process).
+
+    Returns the fake client so callers can further configure get_channel etc.
+    """
+    fake_client = MagicMock(spec=discord.Client)
+    fake_user = MagicMock()
+    fake_user.id = user_id
+    fake_client.user = fake_user
+    bot.client = fake_client  # type: ignore[assignment]
+    return fake_client
 
 
 # ---------------------------------------------------------------------------
-# End-of-session sequence — happy path
+# End-of-session sequence — happy path (non-bot voice member present)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_end_of_session_sequence_order_and_content(
+async def test_end_of_session_sequence_happy_path(
     bot: TeaModeBot,
     registry: SessionRegistry,
 ) -> None:
-    """_run_end_of_session posts embed, reflect prompt, plays reverie, @-mentions,
-    posts follow-up buttons — in that exact order."""
-    sid = _seed_followup_session(registry)
+    """Post-zero sequence: two sends (Session-complete then Reflect), reverie,
+    add_reaction ✅ then ⛔, reflect-message-id stored, watchdog created."""
+    sid = _seed_followup_session(registry, facilitator_id=111)
 
     human_member = _make_member(user_id=500, is_bot=False)
     bot_member = _make_member(user_id=1, is_bot=True)
     fake_vc = _make_voice_client(members=[human_member, bot_member])
 
-    fake_channel = AsyncMock()
-    fake_followup_msg = AsyncMock(spec=discord.Message)
-    fake_followup_msg.id = 99999
-    send_results = [AsyncMock(), AsyncMock(), AsyncMock(), fake_followup_msg]
-    fake_channel.send = AsyncMock(side_effect=send_results)
+    # Swap out bot.client with a fake so .user.id is settable.
+    _install_fake_client_user(bot, user_id=1)
 
-    # Capture the coroutine passed to create_task and close it to avoid
-    # ResourceWarning about unawaited coroutines.
+    fake_channel = AsyncMock()
+    fake_session_complete_msg = AsyncMock(spec=discord.Message)
+    fake_session_complete_msg.id = 11111
+    fake_reflect_msg = AsyncMock(spec=discord.Message)
+    fake_reflect_msg.id = 22222
+    fake_channel.send = AsyncMock(
+        side_effect=[fake_session_complete_msg, fake_reflect_msg]
+    )
+
     captured_coros: list[Any] = []
 
     def _capture_and_discard(coro: Any) -> MagicMock:
         captured_coros.append(coro)
-        return MagicMock()
+        t = MagicMock()
+        t.cancel = MagicMock()
+        return t
 
     with patch(
         "app.bot.voice.play_reverie_then_disconnect", return_value=True
@@ -154,55 +182,56 @@ async def test_end_of_session_sequence_order_and_content(
                 channel=fake_channel,
             )
 
-    # Close captured coroutines to suppress ResourceWarning.
     for coro in captured_coros:
         coro.close()
 
-    # send() was called 4 times: embed, reflect prompt, @-mention, follow-up row.
-    assert fake_channel.send.call_count == 4
+    # Exactly two channel.send calls.
+    assert fake_channel.send.call_count == 2
 
     call_args = fake_channel.send.call_args_list
 
-    # Call 0: end-of-session embed.
-    embed_kwargs = call_args[0].kwargs
-    assert "embed" in embed_kwargs
-    embed: discord.Embed = embed_kwargs["embed"]
+    # Call 0: Session-complete embed with @-mention content.
+    first_kwargs = call_args[0].kwargs
+    assert "content" in first_kwargs
+    assert "<@500>" in first_kwargs["content"]
+    assert "<@1>" not in first_kwargs["content"]
+    assert "Time's up," in first_kwargs["content"]
+    assert "embed" in first_kwargs
+    embed: discord.Embed = first_kwargs["embed"]
     assert embed.title == _END_EMBED_TITLE
     assert embed.description == _END_EMBED_BODY
     assert embed.color == COLORS["end_of_session"]
 
-    # Call 1: reflect prompt (plain text, verbatim).
-    reflect_args = call_args[1]
-    assert reflect_args.args[0] == _MSG_REFLECT_PROMPT
+    # Call 1: Reflect embed with facilitator prompt.
+    second_kwargs = call_args[1].kwargs
+    assert "content" in second_kwargs
+    reflect_content: str = second_kwargs["content"]
+    assert "<@111>" in reflect_content
+    assert "✅" in reflect_content
+    assert "⛔" in reflect_content
+    assert "embed" in second_kwargs
+    reflect_embed: discord.Embed = second_kwargs["embed"]
+    assert reflect_embed.title == "🌿 [Reflect]"
+    assert reflect_embed.color == COLORS["end_of_session"]
 
-    # Call 2: @-mention — bot member filtered out.
-    mention_args = call_args[2]
-    mention_text = mention_args.args[0]
-    assert "<@500>" in mention_text
-    assert "<@1>" not in mention_text  # bot filtered
-
-    # Call 3: follow-up button row (has view= kwarg).
-    followup_kwargs = call_args[3].kwargs
-    assert "view" in followup_kwargs
-    view: discord.ui.View = followup_kwargs["view"]
-    custom_ids = {item.custom_id for item in view.children}  # type: ignore[attr-defined]
-    assert f"teamode:{sid}:followup:yes" in custom_ids
-    assert f"teamode:{sid}:followup:no" in custom_ids
-    assert f"teamode:{sid}:followup:end" in custom_ids
-
-    # Reverie playback must have been called.
+    # Reverie was awaited between the two sends.
     mock_play.assert_called_once_with(fake_vc)
 
-    # Watchdog task scheduled.
-    mock_create_task.assert_called_once()
+    # add_reaction called twice: ✅ then ⛔.
+    assert fake_reflect_msg.add_reaction.call_count == 2
+    add_calls = fake_reflect_msg.add_reaction.call_args_list
+    assert add_calls[0].args[0] == "✅"
+    assert add_calls[1].args[0] == "⛔"
 
-    # Follow-up message stashed.
-    assert bot._followup_messages[sid] is fake_followup_msg
-    assert fake_followup_msg.id in bot._followup_message_ids
+    # Reflect message id stored.
+    assert bot._reflect_message_ids[sid] == 22222
+
+    # Watchdog created.
+    mock_create_task.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# @-mention with empty voice channel
+# End-of-session sequence — empty voice channel
 # ---------------------------------------------------------------------------
 
 
@@ -211,74 +240,122 @@ async def test_end_of_session_empty_voice_channel(
     bot: TeaModeBot,
     registry: SessionRegistry,
 ) -> None:
-    """When no humans are in the voice channel, the @-mention is 'Time's up!'."""
-    sid = _seed_followup_session(registry)
+    """When no humans are in voice, first send content is exactly 'Time's up!'."""
+    sid = _seed_followup_session(registry, facilitator_id=111)
 
     bot_member = _make_member(user_id=1, is_bot=True)
     fake_vc = _make_voice_client(members=[bot_member])
+    _install_fake_client_user(bot, user_id=1)
 
     fake_channel = AsyncMock()
-    fake_followup_msg = AsyncMock(spec=discord.Message)
-    fake_followup_msg.id = 88888
-    fake_channel.send = AsyncMock(
-        side_effect=[AsyncMock(), AsyncMock(), AsyncMock(), fake_followup_msg]
-    )
+    fake_reflect_msg = AsyncMock(spec=discord.Message)
+    fake_reflect_msg.id = 33333
+    fake_channel.send = AsyncMock(side_effect=[AsyncMock(), fake_reflect_msg])
 
-    captured_coros2: list[Any] = []
+    captured_coros: list[Any] = []
 
-    def _capture2(coro: Any) -> MagicMock:
-        captured_coros2.append(coro)
+    def _cap(coro: Any) -> MagicMock:
+        captured_coros.append(coro)
         return MagicMock()
 
     with patch("app.bot.voice.play_reverie_then_disconnect", return_value=True):
-        with patch("app.bot.asyncio.create_task", side_effect=_capture2):
+        with patch("app.bot.asyncio.create_task", side_effect=_cap):
             await bot._run_end_of_session(
                 session_id=sid,
                 voice_client=fake_vc,
                 channel=fake_channel,
             )
 
-    for coro in captured_coros2:
+    for coro in captured_coros:
         coro.close()
 
-    # The @-mention call (index 2) should be the plain "Time's up!" message.
-    mention_call = fake_channel.send.call_args_list[2]
-    assert mention_call.args[0] == "Time's up!"
+    first_content = fake_channel.send.call_args_list[0].kwargs["content"]
+    assert first_content == "Time's up!"
 
 
 # ---------------------------------------------------------------------------
-# followup:yes — facilitator click
+# Reverie failure path
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_followup_yes_facilitator_marks_completed(
+async def test_end_of_session_reverie_failure_logs_warning(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When reverie returns False, a WARNING is logged and Reflect is still sent."""
+    sid = _seed_followup_session(registry, facilitator_id=111)
+
+    fake_vc = _make_voice_client(members=[])
+    _install_fake_client_user(bot, user_id=99)
+
+    fake_channel = AsyncMock()
+    fake_reflect_msg = AsyncMock(spec=discord.Message)
+    fake_reflect_msg.id = 44444
+    fake_channel.send = AsyncMock(side_effect=[AsyncMock(), fake_reflect_msg])
+
+    captured_coros: list[Any] = []
+
+    def _cap(coro: Any) -> MagicMock:
+        captured_coros.append(coro)
+        return MagicMock()
+
+    with caplog.at_level(logging.WARNING, logger="app.bot"):
+        with patch("app.bot.voice.play_reverie_then_disconnect", return_value=False):
+            with patch("app.bot.asyncio.create_task", side_effect=_cap):
+                await bot._run_end_of_session(
+                    session_id=sid,
+                    voice_client=fake_vc,
+                    channel=fake_channel,
+                )
+
+    for coro in captured_coros:
+        coro.close()
+
+    # WARNING logged.
+    assert any("Reverie playback failed" in r.message for r in caplog.records)
+
+    # Reflect message was still sent (second send).
+    assert fake_channel.send.call_count == 2
+    second_kwargs = fake_channel.send.call_args_list[1].kwargs
+    assert "embed" in second_kwargs
+    assert second_kwargs["embed"].title == "🌿 [Reflect]"
+
+
+# ---------------------------------------------------------------------------
+# Facilitator ✅ reaction
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_facilitator_checkmark_marks_completed_1(
     bot: TeaModeBot,
     registry: SessionRegistry,
 ) -> None:
-    """Facilitator 'Yes' click marks session completed(1), cancels watchdog, disables buttons."""
+    """Facilitator ✅ reaction: mark_completed(1), watchdog cancelled, id popped."""
     sid = _seed_followup_session(registry, facilitator_id=111)
 
-    # Stash a fake follow-up message and watchdog.
-    fake_msg = AsyncMock(spec=discord.Message)
-    fake_msg.id = 12345
-    bot._followup_messages[sid] = fake_msg
-    bot._followup_message_ids.add(12345)
-
+    # Set up state as if post-zero sequence ran.
+    bot._reflect_message_ids[sid] = 55555
     watchdog = MagicMock()
     watchdog.cancel = MagicMock()
     bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
 
-    inter = _make_component_interaction(f"teamode:{sid}:followup:yes", user_id=111)
+    _install_fake_client_user(bot, user_id=9)
 
-    await bot.on_interaction(inter)
+    payload = FakeRawReactionActionEvent(
+        user_id=111,
+        message_id=55555,
+        emoji=_make_emoji("✅"),
+    )
 
-    # mark_completed called with yes.
+    await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
+
     session = registry.get(sid)
     assert session is not None
     assert session.state == SessionState.COMPLETED
 
-    # Check SQLite.
     row = registry._conn.execute(
         "SELECT completed_intention, followup_note FROM sessions WHERE id=?", (sid,)
     ).fetchone()
@@ -288,214 +365,40 @@ async def test_followup_yes_facilitator_marks_completed(
     # Watchdog cancelled.
     watchdog.cancel.assert_called_once()
 
-    # Ephemeral confirmation sent.
-    inter.response.send_message.assert_called_once()
-    assert inter.response.send_message.call_args.kwargs.get("ephemeral") is True
-
-    # Buttons disabled (message.edit called with empty view).
-    fake_msg.edit.assert_called_once()
-    edit_kwargs = fake_msg.edit.call_args.kwargs
-    assert "view" in edit_kwargs
+    # Reflect-message id popped.
+    assert sid not in bot._reflect_message_ids
 
 
 # ---------------------------------------------------------------------------
-# followup:yes — non-facilitator click
+# Facilitator ⛔ reaction
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_followup_yes_non_facilitator_sends_refusal(
+async def test_facilitator_no_entry_marks_completed_0_and_posts_why(
     bot: TeaModeBot,
     registry: SessionRegistry,
 ) -> None:
-    """A 'Yes' click from a non-facilitator sends the verbatim refusal; no transition."""
+    """Facilitator ⛔: mark_completed(0), watchdog cancelled, 'why' prompt sent."""
     sid = _seed_followup_session(registry, facilitator_id=111)
 
-    inter = _make_component_interaction(
-        f"teamode:{sid}:followup:yes",
-        user_id=999,  # different user
-    )
-
-    await bot.on_interaction(inter)
-
-    # Ephemeral refusal with verbatim text.
-    inter.response.send_message.assert_called_once()
-    kwargs = inter.response.send_message.call_args.kwargs
-    assert kwargs.get("ephemeral") is True
-    embed: discord.Embed = kwargs["embed"]
-    assert embed.description == _MSG_NOT_FACILITATOR
-
-    # Session still in FOLLOWUP — no transition.
-    session = registry.get(sid)
-    assert session is not None
-    assert session.state == SessionState.FOLLOWUP
-
-
-# ---------------------------------------------------------------------------
-# followup:no — facilitator click → opens WhyModal
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_followup_no_facilitator_opens_why_modal(
-    bot: TeaModeBot,
-    registry: SessionRegistry,
-) -> None:
-    """Facilitator 'No' click opens WhyModal; mark_completed NOT called yet."""
-    sid = _seed_followup_session(registry, facilitator_id=111)
-
-    fake_msg = AsyncMock(spec=discord.Message)
-    fake_msg.id = 12345
-    bot._followup_messages[sid] = fake_msg
-
-    fake_watchdog = MagicMock()
-    fake_watchdog.cancel = MagicMock()
-    bot._watchdog_tasks[sid] = fake_watchdog  # type: ignore[assignment]
-
-    inter = _make_component_interaction(f"teamode:{sid}:followup:no", user_id=111)
-
-    await bot.on_interaction(inter)
-
-    # send_modal called with a WhyModal instance.
-    inter.response.send_modal.assert_called_once()
-    modal_arg = inter.response.send_modal.call_args.args[0]
-    assert isinstance(modal_arg, WhyModal)
-
-    # No transition yet.
-    session = registry.get(sid)
-    assert session is not None
-    assert session.state == SessionState.FOLLOWUP
-
-
-# ---------------------------------------------------------------------------
-# WhyModal.on_submit — with text
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_why_modal_submit_with_text(
-    bot: TeaModeBot,
-    registry: SessionRegistry,
-) -> None:
-    """WhyModal.on_submit with non-empty text marks completed(0, note=text)."""
-    sid = _seed_followup_session(registry, facilitator_id=111)
-
-    fake_msg = AsyncMock(spec=discord.Message)
-    # Use a MagicMock for the watchdog; cancel() is synchronous on asyncio.Task.
-    fake_watchdog = MagicMock()
-    fake_watchdog.cancel = MagicMock()
-
-    modal = WhyModal(
-        bot=bot,
-        session_id=sid,
-        followup_message=fake_msg,
-        watchdog_task=fake_watchdog,  # type: ignore[arg-type]
-    )
-
-    # Simulate TextInput value.
-    text_input = discord.ui.TextInput[discord.ui.Modal](label="What got in the way?")
-    text_input._value = "Got distracted by Slack"
-    modal.why_field = discord.ui.Label(  # type: ignore[assignment]
-        text="What got in the way?",
-        component=text_input,
-    )
-
-    inter = AsyncMock()
-    inter.response = AsyncMock()
-
-    await modal.on_submit(inter)
-
-    session = registry.get(sid)
-    assert session is not None
-    assert session.state == SessionState.COMPLETED
-
-    row = registry._conn.execute(
-        "SELECT completed_intention, followup_note FROM sessions WHERE id=?", (sid,)
-    ).fetchone()
-    assert row[0] == 0
-    assert row[1] == "Got distracted by Slack"
-
-    # Watchdog cancel() was called.
-    fake_watchdog.cancel.assert_called_once()
-
-    # Ephemeral confirmation.
-    inter.response.send_message.assert_called_once()
-    assert inter.response.send_message.call_args.kwargs.get("ephemeral") is True
-
-    # Buttons disabled.
-    fake_msg.edit.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# WhyModal.on_submit — with empty text
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_why_modal_submit_with_empty_text(
-    bot: TeaModeBot,
-    registry: SessionRegistry,
-) -> None:
-    """WhyModal.on_submit with empty text passes followup_note=None."""
-    sid = _seed_followup_session(registry, facilitator_id=111)
-
-    fake_msg = AsyncMock(spec=discord.Message)
-    # Use a MagicMock for the watchdog so cancel() doesn't create awaitable tasks.
-    fake_watchdog = MagicMock()
-    fake_watchdog.cancel = MagicMock()
-
-    modal = WhyModal(
-        bot=bot,
-        session_id=sid,
-        followup_message=fake_msg,
-        watchdog_task=fake_watchdog,  # type: ignore[arg-type]
-    )
-
-    # Simulate empty TextInput.
-    text_input = discord.ui.TextInput[discord.ui.Modal](label="What got in the way?")
-    text_input._value = ""
-    modal.why_field = discord.ui.Label(  # type: ignore[assignment]
-        text="What got in the way?",
-        component=text_input,
-    )
-
-    inter = AsyncMock()
-    inter.response = AsyncMock()
-
-    await modal.on_submit(inter)
-
-    row = registry._conn.execute(
-        "SELECT completed_intention, followup_note FROM sessions WHERE id=?", (sid,)
-    ).fetchone()
-    assert row[0] == 0
-    assert row[1] is None  # empty string → None
-
-
-# ---------------------------------------------------------------------------
-# followup:end — facilitator click
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_followup_end_facilitator_marks_completed_no_answer(
-    bot: TeaModeBot,
-    registry: SessionRegistry,
-) -> None:
-    """Facilitator 'End early' click marks completed with completed_intention=None."""
-    sid = _seed_followup_session(registry, facilitator_id=111)
-
-    fake_msg = AsyncMock(spec=discord.Message)
-    fake_msg.id = 55555
-    bot._followup_messages[sid] = fake_msg
-    bot._followup_message_ids.add(55555)
-
+    bot._reflect_message_ids[sid] = 66666
     watchdog = MagicMock()
     watchdog.cancel = MagicMock()
     bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
 
-    inter = _make_component_interaction(f"teamode:{sid}:followup:end", user_id=111)
+    fake_client = _install_fake_client_user(bot, user_id=9)
 
-    await bot.on_interaction(inter)
+    fake_channel = AsyncMock()
+    fake_client.get_channel = MagicMock(return_value=fake_channel)
+
+    payload = FakeRawReactionActionEvent(
+        user_id=111,
+        message_id=66666,
+        emoji=_make_emoji("⛔"),
+    )
+
+    await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
 
     session = registry.get(sid)
     assert session is not None
@@ -504,13 +407,162 @@ async def test_followup_end_facilitator_marks_completed_no_answer(
     row = registry._conn.execute(
         "SELECT completed_intention, followup_note FROM sessions WHERE id=?", (sid,)
     ).fetchone()
-    assert row[0] is None  # "ended without recording an answer"
+    assert row[0] == 0
     assert row[1] is None
 
     watchdog.cancel.assert_called_once()
-    inter.response.send_message.assert_called_once()
-    assert inter.response.send_message.call_args.kwargs.get("ephemeral") is True
-    fake_msg.edit.assert_called_once()
+    assert sid not in bot._reflect_message_ids
+
+    # "Why" prompt was sent.
+    fake_channel.send.assert_awaited_once()
+    why_text: str = fake_channel.send.call_args.args[0]
+    assert "<@111>" in why_text
+    assert "share what got in the way" in why_text
+
+
+# ---------------------------------------------------------------------------
+# Non-facilitator reaction — logged only
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_non_facilitator_reaction_logged_only(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Non-facilitator ✅: no mark_completed, watchdog untouched, id still present."""
+    sid = _seed_followup_session(registry, facilitator_id=111)
+
+    bot._reflect_message_ids[sid] = 77777
+    watchdog = MagicMock()
+    watchdog.cancel = MagicMock()
+    bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
+
+    _install_fake_client_user(bot, user_id=9)
+
+    payload = FakeRawReactionActionEvent(
+        user_id=999,  # not the facilitator
+        message_id=77777,
+        emoji=_make_emoji("✅"),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.bot"):
+        await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
+
+    # No state transition.
+    session = registry.get(sid)
+    assert session is not None
+    assert session.state == SessionState.FOLLOWUP
+
+    # Watchdog not cancelled.
+    watchdog.cancel.assert_not_called()
+
+    # Reflect-message id still present.
+    assert sid in bot._reflect_message_ids
+
+    # INFO log emitted.
+    assert any("Non-facilitator reaction" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Bot's own pre-populated reactions are ignored
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bot_own_reaction_ignored(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """Reactions from the bot itself are silently ignored."""
+    sid = _seed_followup_session(registry, facilitator_id=111)
+
+    bot._reflect_message_ids[sid] = 88888
+    watchdog = MagicMock()
+    watchdog.cancel = MagicMock()
+    bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
+
+    _install_fake_client_user(bot, user_id=42)  # bot's own id
+
+    payload = FakeRawReactionActionEvent(
+        user_id=42,  # same as bot
+        message_id=88888,
+        emoji=_make_emoji("✅"),
+    )
+
+    await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
+
+    # No state change.
+    session = registry.get(sid)
+    assert session is not None
+    assert session.state == SessionState.FOLLOWUP
+
+    watchdog.cancel.assert_not_called()
+    assert sid in bot._reflect_message_ids
+
+
+# ---------------------------------------------------------------------------
+# Unrelated emoji on the Reflect message is ignored
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unrelated_emoji_on_reflect_message_ignored(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """An emoji like 🎉 from any participant on the Reflect message is ignored."""
+    sid = _seed_followup_session(registry, facilitator_id=111)
+
+    bot._reflect_message_ids[sid] = 99990
+    watchdog = MagicMock()
+    watchdog.cancel = MagicMock()
+    bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
+
+    _install_fake_client_user(bot, user_id=9)
+
+    payload = FakeRawReactionActionEvent(
+        user_id=111,
+        message_id=99990,
+        emoji=_make_emoji("🎉"),
+    )
+
+    await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
+
+    session = registry.get(sid)
+    assert session is not None
+    assert session.state == SessionState.FOLLOWUP
+
+    watchdog.cancel.assert_not_called()
+    assert sid in bot._reflect_message_ids
+
+
+# ---------------------------------------------------------------------------
+# Reaction on a non-session message is ignored
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reaction_on_non_session_message_ignored(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """A reaction on a message id not in _reflect_message_ids returns immediately."""
+    # No reflect message ids registered.
+    _install_fake_client_user(bot, user_id=9)
+
+    payload = FakeRawReactionActionEvent(
+        user_id=111,
+        message_id=12345,  # unknown
+        emoji=_make_emoji("✅"),
+    )
+
+    # Should return without raising.
+    await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
+
+    # Nothing in registry since we never seeded.
+    assert len(bot._reflect_message_ids) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -523,21 +575,16 @@ async def test_watchdog_fires_marks_followup_timeout(
     bot: TeaModeBot,
     registry: SessionRegistry,
 ) -> None:
-    """When the watchdog fires, mark_followup_timeout is called and buttons disabled.
-
-    Strategy: run _run_end_of_session with asyncio.create_task replaced by
-    a synchronous collector, then invoke the watchdog coroutine directly with
-    asyncio.sleep patched to return immediately.
-    """
+    """When the watchdog fires, mark_followup_timeout is called and id is popped."""
     sid = _seed_followup_session(registry, facilitator_id=111)
 
     fake_channel = AsyncMock()
     fake_vc = _make_voice_client(members=[])
-    fake_followup_return = AsyncMock(spec=discord.Message)
-    fake_followup_return.id = 77777
-    fake_channel.send = AsyncMock(
-        side_effect=[AsyncMock(), AsyncMock(), AsyncMock(), fake_followup_return]
-    )
+    _install_fake_client_user(bot, user_id=9)
+
+    fake_reflect_msg = AsyncMock(spec=discord.Message)
+    fake_reflect_msg.id = 10001
+    fake_channel.send = AsyncMock(side_effect=[AsyncMock(), fake_reflect_msg])
 
     captured_coro: list[Any] = []
 
@@ -557,7 +604,7 @@ async def test_watchdog_fires_marks_followup_timeout(
 
     assert len(captured_coro) == 1
 
-    # Now run the watchdog coroutine with sleep patched to return immediately.
+    # Run the watchdog coroutine with sleep patched to return immediately.
     with patch("app.bot.asyncio.sleep", return_value=None):
         await captured_coro[0]
 
@@ -565,163 +612,75 @@ async def test_watchdog_fires_marks_followup_timeout(
     assert session is not None
     assert session.state == SessionState.FOLLOWUP_TIMEOUT
 
-
-# ---------------------------------------------------------------------------
-# Reaction listener — 👍 on follow-up message
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_reaction_thumbsup_logged_no_state_change(
-    bot: TeaModeBot,
-    registry: SessionRegistry,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A 👍 reaction on a follow-up message is logged; no SQLite write, no state change."""
-    sid = _seed_followup_session(registry, facilitator_id=111)
-
-    # Register a fake follow-up message id.
-    bot._followup_message_ids.add(42000)
-
-    payload = MagicMock(spec=discord.RawReactionActionEvent)
-    payload.message_id = 42000
-    payload.user_id = 500
-    payload.emoji = MagicMock()
-    payload.emoji.__str__ = lambda self: "👍"
-
-    import logging
-
-    with caplog.at_level(logging.INFO, logger="app.bot"):
-        await bot.on_raw_reaction_add(payload)
-
-    # Logged at INFO level.
-    assert any("👍" in record.message for record in caplog.records)
-
-    # No state transition.
-    session = registry.get(sid)
-    assert session is not None
-    assert session.state == SessionState.FOLLOWUP
+    # Reflect-message id popped.
+    assert sid not in bot._reflect_message_ids
 
 
 # ---------------------------------------------------------------------------
-# Reaction listener — 👎 on follow-up message
+# Timer-pick auto-disable
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_reaction_thumbsdown_logged_no_state_change(
-    bot: TeaModeBot,
-    registry: SessionRegistry,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A 👎 reaction on a follow-up message is logged; no state change."""
-    sid = _seed_followup_session(registry, facilitator_id=111)
-
-    bot._followup_message_ids.add(43000)
-
-    payload = MagicMock(spec=discord.RawReactionActionEvent)
-    payload.message_id = 43000
-    payload.user_id = 600
-    payload.emoji = MagicMock()
-    payload.emoji.__str__ = lambda self: "👎"
-
-    import logging
-
-    with caplog.at_level(logging.INFO, logger="app.bot"):
-        await bot.on_raw_reaction_add(payload)
-
-    assert any("👎" in record.message for record in caplog.records)
-
-    session = registry.get(sid)
-    assert session is not None
-    assert session.state == SessionState.FOLLOWUP
-
-
-# ---------------------------------------------------------------------------
-# Reaction listener — unrelated emoji ignored
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_reaction_other_emoji_ignored(
-    bot: TeaModeBot,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Reactions with emoji other than 👍/👎 produce no log output."""
-    bot._followup_message_ids.add(44000)
-
-    payload = MagicMock(spec=discord.RawReactionActionEvent)
-    payload.message_id = 44000
-    payload.user_id = 700
-    payload.emoji = MagicMock()
-    payload.emoji.__str__ = lambda self: "🍵"
-
-    import logging
-
-    with caplog.at_level(logging.INFO, logger="app.bot"):
-        await bot.on_raw_reaction_add(payload)
-
-    # Should not have logged anything reaction-related.
-    assert not any("Reaction" in r.message for r in caplog.records)
-
-
-# ---------------------------------------------------------------------------
-# Reaction listener — non-follow-up message ignored
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_reaction_on_non_followup_message_ignored(
-    bot: TeaModeBot,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A reaction on a message id not in _followup_message_ids is ignored entirely."""
-    # No message ids registered.
-    payload = MagicMock(spec=discord.RawReactionActionEvent)
-    payload.message_id = 99999
-    payload.user_id = 800
-    payload.emoji = MagicMock()
-    payload.emoji.__str__ = lambda self: "👍"
-
-    import logging
-
-    with caplog.at_level(logging.INFO, logger="app.bot"):
-        await bot.on_raw_reaction_add(payload)
-
-    assert not any("Reaction" in r.message for r in caplog.records)
-
-
-# ---------------------------------------------------------------------------
-# Watchdog cancellation race: facilitator clicks after watchdog fires
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_followup_yes_after_watchdog_fires_no_exception(
+async def test_timer_pick_disables_buttons(
     bot: TeaModeBot,
     registry: SessionRegistry,
 ) -> None:
-    """If facilitator clicks Yes after the watchdog has already fired (session
-    already in FOLLOWUP_TIMEOUT), the handler responds with a graceful ephemeral
-    message and no exception escapes."""
-    sid = _seed_followup_session(registry, facilitator_id=111)
+    """After a timer-pick click, the three timer buttons are disabled."""
+    session = registry.create_pending_session(
+        guild_id="222",
+        text_channel_id="333",
+        voice_channel_id="444",
+        facilitator_id="111",
+    )
+    sid = session.session_id
 
-    # Simulate watchdog having already fired — advance to terminal state.
-    registry.mark_followup_timeout(session_id=sid)
+    # Build three enabled Button objects for the fake view.
+    btn_10: discord.ui.Button[discord.ui.View] = discord.ui.Button(
+        label="10 min",
+        custom_id=f"teamode:{sid}:timer:10",
+        style=discord.ButtonStyle.secondary,
+    )
+    btn_25: discord.ui.Button[discord.ui.View] = discord.ui.Button(
+        label="25 min",
+        custom_id=f"teamode:{sid}:timer:25",
+        style=discord.ButtonStyle.secondary,
+    )
+    btn_50: discord.ui.Button[discord.ui.View] = discord.ui.Button(
+        label="50 min",
+        custom_id=f"teamode:{sid}:timer:50",
+        style=discord.ButtonStyle.secondary,
+    )
 
-    # Also simulate no stash in bot (watchdog cleaned it up).
-    # Session is now FOLLOWUP_TIMEOUT; no watchdog task or followup message in bot.
+    fake_view = discord.ui.View()
+    fake_view.add_item(btn_10)
+    fake_view.add_item(btn_25)
+    fake_view.add_item(btn_50)
 
-    inter = _make_component_interaction(f"teamode:{sid}:followup:yes", user_id=111)
+    fake_message = AsyncMock(spec=discord.Message)
+    fake_message.edit = AsyncMock()
 
-    # Must not raise.
-    await bot.on_interaction(inter)
+    inter = AsyncMock()
+    inter.type = discord.InteractionType.component
+    inter.data = {"custom_id": f"teamode:{sid}:timer:25"}
 
-    # A graceful ephemeral response must have been sent.
-    inter.response.send_message.assert_called_once()
-    kwargs = inter.response.send_message.call_args.kwargs
-    assert kwargs.get("ephemeral") is True
-    # The message is not the facilitator-auth refusal.
-    if "embed" in kwargs:
-        embed_desc = kwargs["embed"].description
-        assert embed_desc != _MSG_NOT_FACILITATOR
+    user = MagicMock()
+    user.id = 111
+    inter.user = user
+
+    voice_channel = MagicMock(spec=discord.VoiceChannel)
+    inter.channel = voice_channel
+    inter.message = fake_message
+
+    inter.response = AsyncMock()
+
+    with patch("app.bot.discord.ui.View.from_message", return_value=fake_view):
+        await bot.on_interaction(inter)
+
+    # All buttons are now disabled.
+    for child in fake_view.children:
+        assert isinstance(child, discord.ui.Button)
+        assert child.disabled is True
+
+    # message.edit was awaited.
+    fake_message.edit.assert_awaited_once()
