@@ -13,9 +13,9 @@ from app.bot import (
     IntentionModal,
     TeaModeBot,
     _MSG_NOT_FACILITATOR,
-    _MSG_PARTICIPANT_PROMPT,
     _MSG_VOICE_CONNECT_FAILED,
     _ACTIVE_TIMER_FMT,
+    _format_intention_line,
 )
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
@@ -205,14 +205,15 @@ async def test_foreign_custom_id_is_ignored(bot: TeaModeBot) -> None:
 
 
 @pytest.mark.asyncio
-async def test_modal_submit_records_intention_and_posts_participant_prompt(
+async def test_modal_submit_records_intention_and_posts_timer(
     bot: TeaModeBot,
     registry: SessionRegistry,
     conn: sqlite3.Connection,
 ) -> None:
-    """Submitting the intention modal records the intention, posts the participant
-    prompt, connects voice, marks the session active, posts the timer message,
-    and schedules the countdown.
+    """Submitting the intention modal records the intention, connects voice,
+    marks the session active, posts the timer message, and schedules the countdown.
+    The participant prompt is no longer posted from on_submit — it fires from
+    _handle_teamode before the facilitator picks a duration.
     """
     session_id = _seed_session_with_duration(
         registry, facilitator_id=111, duration_minutes=25
@@ -232,11 +233,10 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     # Build a fake interaction for the modal submit.
     inter = AsyncMock()
     inter.response = AsyncMock()
-    # followup.send returns different values: None for the participant prompt
-    # (no wait=True), then the fake timer message (wait=True).
+    # followup.send returns the fake timer message (wait=True).
     fake_timer_msg = AsyncMock()
     inter.followup = AsyncMock()
-    inter.followup.send = AsyncMock(side_effect=[None, fake_timer_msg])
+    inter.followup.send = AsyncMock(return_value=fake_timer_msg)
 
     fake_voice_client = AsyncMock()
 
@@ -270,11 +270,18 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     # Modal interaction must be deferred (ephemeral ack, no channel noise).
     inter.response.defer.assert_called_once_with(ephemeral=True)
 
-    # Participant prompt posted first via followup (bypasses per-channel perms).
-    assert inter.followup.send.call_count == 2
-    first_call = inter.followup.send.call_args_list[0]
-    assert first_call.args == (_MSG_PARTICIPANT_PROMPT,)
-    assert first_call.kwargs.get("ephemeral") is False
+    # Only one followup.send: the active timer message (no participant prompt here).
+    assert inter.followup.send.call_count == 1
+    timer_call = inter.followup.send.call_args_list[0]
+    expected_initial = _ACTIVE_TIMER_FMT.format(
+        intention_line=_format_intention_line("finish the changelog"),
+        duration=25,
+        mm=25,
+        ss=0,
+    )
+    assert timer_call.args == (expected_initial,)
+    assert timer_call.kwargs.get("ephemeral") is False
+    assert timer_call.kwargs.get("wait") is True
 
     # voice.connect called with the channel passed at modal-construction time
     # (no REST fetch_channel call occurs).
@@ -282,15 +289,6 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
 
     # Session advanced to ACTIVE.
     assert session.state == SessionState.ACTIVE
-
-    # Active timer message posted second via followup (wait=True for message handle).
-    second_call = inter.followup.send.call_args_list[1]
-    expected_initial = _ACTIVE_TIMER_FMT.format(
-        intention="finish the changelog", duration=25, mm=25, ss=0
-    )
-    assert second_call.args == (expected_initial,)
-    assert second_call.kwargs.get("ephemeral") is False
-    assert second_call.kwargs.get("wait") is True
 
     # Countdown task scheduled.
     mock_create_task.assert_called_once()
@@ -334,15 +332,13 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
     assert session is not None
     assert session.state == SessionState.CANCELLED
 
-    # Participant prompt posted first (before voice connect attempt), then the
-    # ephemeral error on failure — two followup sends total.
-    assert inter.followup.send.call_count == 2
-    first_call = inter.followup.send.call_args_list[0]
-    assert first_call.args == (_MSG_PARTICIPANT_PROMPT,)
-    assert first_call.kwargs.get("ephemeral") is False
-    second_call = inter.followup.send.call_args_list[1]
-    assert second_call.args == (_MSG_VOICE_CONNECT_FAILED,)
-    assert second_call.kwargs.get("ephemeral") is True
+    # Participant prompt no longer fires from on_submit (moved to /teamode
+    # invocation handler). The only followup send on failure is the
+    # ephemeral voice-connect error.
+    assert inter.followup.send.call_count == 1
+    only_call = inter.followup.send.call_args_list[0]
+    assert only_call.args == (_MSG_VOICE_CONNECT_FAILED,)
+    assert only_call.kwargs.get("ephemeral") is True
 
     # No countdown task scheduled.
     mock_create_task.assert_not_called()

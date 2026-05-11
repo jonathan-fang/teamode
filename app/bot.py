@@ -51,7 +51,7 @@ _MSG_PARTICIPANT_PROMPT = "🥅 **[Set Intention]** Please share your intention 
 _MSG_VOICE_CONNECT_FAILED = "Could not join voice — session cancelled."
 
 # Active timer message format (two spaces between intention and timer per Spec).
-_ACTIVE_TIMER_FMT = "🍵 Facilitator's Intention: {intention}\n{duration} min session\n⏳ {mm:02d}:{ss:02d}"
+_ACTIVE_TIMER_FMT = "{intention_line}\n{duration} min session\n⏳ {mm:02d}:{ss:02d}"
 
 # Edit cadence per UI-ADR § "Timer edit cadence".
 _EDIT_INTERVAL_SECONDS = 10
@@ -72,6 +72,16 @@ def _format_timer(seconds_remaining: int) -> str:
     """Format *seconds_remaining* as ``mm:ss`` (zero-padded)."""
     mm, ss = divmod(seconds_remaining, 60)
     return f"{mm:02d}:{ss:02d}"
+
+
+def _format_intention_line(intention: str | None) -> str:
+    """Render the first line of the active timer message.
+
+    Returns the placeholder when no intention was captured.
+    """
+    if intention and intention.strip():
+        return f"🍵 Facilitator's Intention: {intention}"
+    return "🍵 No intention set"
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +119,7 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         component=discord.ui.TextInput(
             style=discord.TextStyle.long,
             max_length=4000,
-            required=True,
+            required=False,
         ),
     )
 
@@ -143,10 +153,6 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         )
         # Acknowledge the modal interaction without cluttering the channel.
         await interaction.response.defer(ephemeral=True)
-        # Post the participant prompt publicly via the interaction webhook.
-        # Using followup.send (ephemeral=False) avoids requiring explicit
-        # View Channel + Send Messages permissions on the voice channel.
-        await interaction.followup.send(_MSG_PARTICIPANT_PROMPT, ephemeral=False)
 
         # --- Connect voice ---
         # Use the channel resolved at click-handler time — no REST round-trip.
@@ -163,7 +169,7 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         self._bot._registry.mark_active(session_id=self._session_id)
         assert session.duration_minutes is not None
         initial_content = _ACTIVE_TIMER_FMT.format(
-            intention=session.intention,
+            intention_line=_format_intention_line(session.intention),
             duration=session.duration_minutes,
             mm=session.duration_minutes,
             ss=0,
@@ -404,7 +410,7 @@ class TeaModeBot:
         # Step b: Post Session-complete embed with the @-mention content.
         session_complete_embed = discord.Embed(
             title=_END_EMBED_TITLE,
-            description=_END_EMBED_BODY,
+            description=f"## {_END_EMBED_BODY}",
             color=COLORS["end_of_session"],
         )
         await channel.send(content=mention_content, embed=session_complete_embed)
@@ -415,11 +421,7 @@ class TeaModeBot:
             logger.warning("Reverie playback failed for session %s", session_id)
 
         # Step d: Post Reflect message with facilitator prompt.
-        session = self._registry.get(session_id)
-        facilitator_id = session.facilitator_id if session is not None else "0"
-        facilitator_prompt = (
-            f"Facilitator <@{facilitator_id}>! React ✅ if you finished, ⛔ if not."
-        )
+        facilitator_prompt = "[Follow-up] React ✅ if you finished, ⛔ if not."
         reflect_embed = discord.Embed(
             title="🌿 [Reflect]",
             description=(
@@ -555,9 +557,9 @@ class TeaModeBot:
             # Session was cleaned up; nothing to do.
             return
 
-        # Check the session intention for the message content.
+        # Check the session for the message content.
         session = self._registry.get(session_id)
-        if session is None or session.intention is None:
+        if session is None:
             return
 
         # Skip if a previous edit is still in flight.
@@ -572,7 +574,7 @@ class TeaModeBot:
         async with edit_state.lock:
             mm, ss = divmod(seconds_remaining, 60)
             content = _ACTIVE_TIMER_FMT.format(
-                intention=session.intention,
+                intention_line=_format_intention_line(session.intention),
                 duration=session.duration_minutes,
                 mm=mm,
                 ss=ss,
@@ -692,6 +694,25 @@ class TeaModeBot:
 
         await interaction.response.send_message(embed=embed, view=view)
 
+        # Post the participant prompt 1 second after the welcome embed.
+        await asyncio.sleep(1.0)
+
+        # Snapshot voice members, filter the bot itself.
+        assert voice_state.channel is not None
+        bot_id = self.client.user.id if self.client.user else None
+        members = [
+            m for m in voice_state.channel.members if not m.bot and m.id != bot_id
+        ]
+        if members:
+            mentions = " ".join(m.mention for m in members)
+            participant_prompt = (
+                f"🥅 **[Set Intention]** {mentions} Please share your intention "
+                "for this session in voice or type it in the chat."
+            )
+        else:
+            participant_prompt = _MSG_PARTICIPANT_PROMPT
+        await interaction.followup.send(participant_prompt, ephemeral=False)
+
     def run(self, token: str) -> None:
         """Start the Discord event loop."""
         self.client.run(token)
@@ -729,7 +750,7 @@ def _build_timer_view(session_id: int) -> discord.ui.View:
     ``teamode:<session_id>:timer:<value>``.
     """
     view = discord.ui.View()
-    for minutes in (10, 25, 50):
+    for minutes in (5, 10, 25, 50):
         button: discord.ui.Button[discord.ui.View] = discord.ui.Button(
             label=f"{minutes} min",
             custom_id=f"teamode:{session_id}:timer:{minutes}",

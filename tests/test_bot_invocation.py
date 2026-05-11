@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
@@ -12,6 +12,7 @@ import pytest
 from app.bot import (
     TeaModeBot,
     _MSG_NOT_IN_VOICE,
+    _MSG_PARTICIPANT_PROMPT,
     _MSG_SESSION_ACTIVE,
     _MSG_WRONG_CHANNEL,
 )
@@ -51,11 +52,14 @@ def _make_voice_interaction(
     guild_id: int = 222,
     user_id: int = 111,
     user_voice_channel_id: int | None = 333,
+    voice_channel_members: list[Any] | None = None,
 ) -> Any:
     """Build a FakeInteraction that looks like it came from a VoiceChannel.
 
     By default the user is in the same voice channel as the text chat.
     Pass ``user_voice_channel_id=None`` to simulate the user not being in voice.
+    Pass ``voice_channel_members`` to control the members list on the voice channel
+    (used to test participant prompt @-mention behavior).
     """
     inter = AsyncMock()
 
@@ -72,6 +76,15 @@ def _make_voice_interaction(
     if user_voice_channel_id is not None:
         voice_channel = MagicMock()
         voice_channel.id = user_voice_channel_id
+        # Default members list: just the invoking user (non-bot).
+        if voice_channel_members is None:
+            member = MagicMock(spec=discord.Member)
+            member.id = user_id
+            member.bot = False
+            member.mention = f"<@{user_id}>"
+            voice_channel.members = [member]
+        else:
+            voice_channel.members = voice_channel_members
         voice_state = MagicMock()
         voice_state.channel = voice_channel
         user.voice = voice_state
@@ -227,7 +240,8 @@ async def test_guard_pass_creates_session_and_posts_welcome(
     conn: sqlite3.Connection,
     registry: SessionRegistry,
 ) -> None:
-    """When all guards pass, create_pending_session is called and welcome is posted non-ephemerally."""
+    """When all guards pass, create_pending_session is called and welcome is posted non-ephemerally,
+    then the participant prompt is posted via followup.send."""
     inter = _make_voice_interaction(
         channel_id=333,
         guild_id=222,
@@ -235,7 +249,8 @@ async def test_guard_pass_creates_session_and_posts_welcome(
         user_voice_channel_id=333,
     )
 
-    await bot._handle_teamode(inter)
+    with patch("app.bot.asyncio.sleep", new=AsyncMock()):
+        await bot._handle_teamode(inter)
 
     # send_message called once, not ephemeral, with an embed and a view.
     inter.response.send_message.assert_called_once()
@@ -247,6 +262,13 @@ async def test_guard_pass_creates_session_and_posts_welcome(
     # Embed uses matcha-sage color.
     embed: discord.Embed = call_kwargs["embed"]
     assert embed.color == discord.Color.from_str("#7B9D6F")
+
+    # Participant prompt posted via followup.send after the welcome embed.
+    inter.followup.send.assert_called_once()
+    followup_call = inter.followup.send.call_args
+    prompt_text: str = followup_call.args[0]
+    assert "[Set Intention]" in prompt_text
+    assert followup_call.kwargs.get("ephemeral") is False
 
     # Row inserted with status='pending'.
     assert _row_count(conn) == 1
@@ -266,21 +288,96 @@ async def test_guard_pass_timer_button_custom_ids(
     bot: TeaModeBot,
     conn: sqlite3.Connection,
 ) -> None:
-    """Timer-pick button custom_ids follow teamode:<session_id>:timer:<minutes>."""
+    """Timer-pick buttons have custom_ids for 5/10/25/50 min and correct labels."""
     inter = _make_voice_interaction(channel_id=333, guild_id=222, user_id=111)
 
-    await bot._handle_teamode(inter)
+    with patch("app.bot.asyncio.sleep", new=AsyncMock()):
+        await bot._handle_teamode(inter)
 
     call_kwargs = inter.response.send_message.call_args.kwargs
     view: discord.ui.View = call_kwargs["view"]
-    custom_ids = [
-        item.custom_id for item in view.children if isinstance(item, discord.ui.Button)
-    ]  # type: ignore[attr-defined]
+    buttons = [item for item in view.children if isinstance(item, discord.ui.Button)]
+    custom_ids = [b.custom_id for b in buttons]  # type: ignore[attr-defined]
+    labels = [b.label for b in buttons]
 
     # Fetch the session_id that was created.
     cur = conn.execute("SELECT id FROM sessions")
     session_id = cur.fetchone()[0]
 
+    assert f"teamode:{session_id}:timer:5" in custom_ids
     assert f"teamode:{session_id}:timer:10" in custom_ids
     assert f"teamode:{session_id}:timer:25" in custom_ids
     assert f"teamode:{session_id}:timer:50" in custom_ids
+    assert "5 min" in labels
+    assert "10 min" in labels
+    assert "25 min" in labels
+    assert "50 min" in labels
+
+
+# ---------------------------------------------------------------------------
+# Participant prompt: voice-member mentions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_participant_prompt_mentions_non_bot_members(
+    bot: TeaModeBot,
+    conn: sqlite3.Connection,
+) -> None:
+    """Participant prompt @-mentions non-bot voice members and filters the bot."""
+    # Two non-bot members plus a bot member.
+    member_a = MagicMock(spec=discord.Member)
+    member_a.id = 501
+    member_a.bot = False
+    member_a.mention = "<@501>"
+
+    member_b = MagicMock(spec=discord.Member)
+    member_b.id = 502
+    member_b.bot = False
+    member_b.mention = "<@502>"
+
+    bot_member = MagicMock(spec=discord.Member)
+    bot_member.id = 999
+    bot_member.bot = True
+    bot_member.mention = "<@999>"
+
+    inter = _make_voice_interaction(
+        channel_id=333,
+        guild_id=222,
+        user_id=111,
+        user_voice_channel_id=333,
+        voice_channel_members=[member_a, member_b, bot_member],
+    )
+
+    with patch("app.bot.asyncio.sleep", new=AsyncMock()):
+        await bot._handle_teamode(inter)
+
+    inter.followup.send.assert_called_once()
+    prompt_text: str = inter.followup.send.call_args.args[0]
+    assert "<@501>" in prompt_text
+    assert "<@502>" in prompt_text
+    # Bot must not appear in the mentions.
+    assert "<@999>" not in prompt_text
+    assert "[Set Intention]" in prompt_text
+
+
+@pytest.mark.asyncio
+async def test_participant_prompt_fallback_when_no_members(
+    bot: TeaModeBot,
+    conn: sqlite3.Connection,
+) -> None:
+    """Participant prompt falls back to the generic text when the member list is empty."""
+    inter = _make_voice_interaction(
+        channel_id=333,
+        guild_id=222,
+        user_id=111,
+        user_voice_channel_id=333,
+        voice_channel_members=[],
+    )
+
+    with patch("app.bot.asyncio.sleep", new=AsyncMock()):
+        await bot._handle_teamode(inter)
+
+    inter.followup.send.assert_called_once()
+    prompt_text: str = inter.followup.send.call_args.args[0]
+    assert prompt_text == _MSG_PARTICIPANT_PROMPT

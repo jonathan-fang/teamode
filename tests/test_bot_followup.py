@@ -199,16 +199,14 @@ async def test_end_of_session_sequence_happy_path(
     assert "embed" in first_kwargs
     embed: discord.Embed = first_kwargs["embed"]
     assert embed.title == _END_EMBED_TITLE
-    assert embed.description == _END_EMBED_BODY
+    assert embed.description == f"## {_END_EMBED_BODY}"
     assert embed.color == COLORS["end_of_session"]
 
     # Call 1: Reflect embed with facilitator prompt.
     second_kwargs = call_args[1].kwargs
     assert "content" in second_kwargs
     reflect_content: str = second_kwargs["content"]
-    assert "<@111>" in reflect_content
-    assert "✅" in reflect_content
-    assert "⛔" in reflect_content
+    assert reflect_content == "[Follow-up] React ✅ if you finished, ⛔ if not."
     assert "embed" in second_kwargs
     reflect_embed: discord.Embed = second_kwargs["embed"]
     assert reflect_embed.title == "🌿 [Reflect]"
