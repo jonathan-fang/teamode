@@ -9,9 +9,8 @@ The bot user is named **Ocha** (お茶 — tea). It's tiny, opinionated, and
 designed to replace the Japanese `simple-timer` bot a small group of
 friends were already using.
 
-> **Status:** pre-MVP. Planning complete; implementation not yet started.
-> This README describes the bot's intended shape; sections marked
-> _planned_ aren't usable yet.
+> **Status:** V1 shipped. The bot is functional end-to-end for
+> personal/self-hosted use. See `changelog.md` for what landed.
 
 ---
 
@@ -25,21 +24,28 @@ friends were already using.
      tidy your desk, and get rid of any distractions like phones
      or irrelevant tabs.
 
-     [ 10 ]  [ 25 ]  [ 50 ]   ← pick a timer
+     [ Set Intention ]          ← participant prompt (1 s after welcome)
 
-  ⌨  Modal: "What's your intention for this session?"
+     [ 5 ]  [ 10 ]  [ 25 ]  [ 50 ]   ← facilitator picks timer
 
-  🍵  Intention: Finish the v26Q2 changelog.
-  ⏳  24:50 remaining            ← edits every 10 seconds
+  ⌨  Modal: "What will you focus on?"   (optional — can be left blank)
+
+  🍵 Facilitator's Intention: Finish the v26Q2 changelog.
+     25 min session
+  ⏳ 24:50                       ← edits every 10 seconds
+                                    (shows 🍵 No intention set if blank)
 
        …focus block, bot stays silently in voice…
 
-  🍵  Time's up — tea time!     ← reverie chime plays in voice
-  🌿✨
+  ✨ Session complete!
+     ### 🌿 Sip your tea, stretch, and notice your progress.
+                                 ← reverie chime plays in voice
 
-       Did you accomplish your intention?
-       [ Yes ]  [ No ]           ← facilitator answers
-       👍 / 👎 reactions open to anyone in the voice channel for 3 minutes
+  🌿 [Reflect]
+     ### Did you finish what you set out to do?
+     React with ✅ if you finished, or ⛔ if not.
+                                 ← pre-populated reactions; facilitator's
+                                    reaction is authoritative (3-min window)
 
   ✓ Session logged.
 ```
@@ -86,7 +92,7 @@ git clone https://github.com/jonathan-fang/teamode.git
 cd teamode
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt   # planned
+pip install -r requirements.txt
 ```
 
 ### Configure
@@ -104,7 +110,7 @@ Or put them in a `.env` file at the repo root (gitignored).
 ### Run
 
 ```bash
-python3 teamode.py   # planned
+python3 teamode.py
 ```
 
 The bot logs in, registers `/teamode` as a guild-scoped command on
@@ -138,6 +144,7 @@ For multi-server use, a small VPS works well. See
 | You invoke `/teamode` but you're not in a voice channel | Refused: join voice first |
 | Another `/teamode` is already running in this channel | Refused (privately) — pick another channel |
 | You leave voice mid-session (others remain) | A random remaining voice member becomes facilitator |
+| You want to hand the facilitator role to someone else manually | Run `/handoff @user` — they must be in the voice channel |
 | You leave voice mid-session (solo) | 5-minute rejoin grace; otherwise session marked incomplete |
 | Bot loses its websocket | Auto-reconnects; the timer keeps running |
 | Bot process dies | Session is marked `crashed` on next startup |
@@ -148,11 +155,11 @@ For multi-server use, a small VPS works well. See
 
 ```
 teamode/
-├── teamode.py                 ← entry point (planned)
-├── teamode/                   ← package: bot, session, voice, db (planned)
+├── teamode.py                 ← entry point
+├── app/                       ← package: bot, session, voice, db, config
 ├── assets/reverie.wav         ← end-of-session chime
 ├── docs/                      ← Discord platform notes, schema, comparisons
-├── tests/                     ← pytest suite (planned)
+├── tests/                     ← pytest suite
 ├── .project-meta/             ← project conventions, UI-ADR
 ├── .LLMAO/                    ← development workflow docs
 ├── .project-meta/USEE/        ← project-knowledge framework

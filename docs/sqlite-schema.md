@@ -1,4 +1,4 @@
-# TeaMode SQLite Schema (Proposed)
+# TeaMode SQLite Schema
 
 One table for v1: `sessions`. Rationale: each `/teamode` invocation produces
 exactly one row, written once at session start and updated as state advances
@@ -104,7 +104,7 @@ ISO-8601 UTC timestamp at the moment the timer was confirmed and started
   column is NULL.
 
 ### `duration_minutes`
-The chosen timer length: 10, 25, or 50 for MVP.
+The chosen timer length: 5, 10, 25, or 50.
 
 - **Type**: INTEGER.
 - **Validation**: enforced at choice-time (button options) — not a free
