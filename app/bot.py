@@ -124,8 +124,10 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         )
         # Acknowledge the modal interaction without cluttering the channel.
         await interaction.response.defer(ephemeral=True)
-        # Post the participant prompt publicly in the session's text channel.
-        await interaction.channel.send(_MSG_PARTICIPANT_PROMPT)  # type: ignore[union-attr]
+        # Post the participant prompt publicly via the interaction webhook.
+        # Using followup.send (ephemeral=False) avoids requiring explicit
+        # View Channel + Send Messages permissions on the voice channel.
+        await interaction.followup.send(_MSG_PARTICIPANT_PROMPT, ephemeral=False)
 
         # --- Connect voice ---
         try:
@@ -151,7 +153,10 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
             mm=session.duration_minutes,
             ss=0,
         )
-        timer_message = await interaction.channel.send(initial_content)  # type: ignore[union-attr]
+        # wait=True ensures we get the real WebhookMessage back (with .edit/.id).
+        timer_message = await interaction.followup.send(
+            initial_content, ephemeral=False, wait=True
+        )
 
         # Stash edit state so the tick callback can reach it.
         self._bot._edit_states[self._session_id] = _EditState(message=timer_message)

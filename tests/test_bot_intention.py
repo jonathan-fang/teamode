@@ -221,11 +221,11 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     # Build a fake interaction for the modal submit.
     inter = AsyncMock()
     inter.response = AsyncMock()
-    # channel.send returns different messages on first (participant prompt) and
-    # second (active timer) call.
+    # followup.send returns different values: None for the participant prompt
+    # (no wait=True), then the fake timer message (wait=True).
     fake_timer_msg = AsyncMock()
-    inter.channel.send = AsyncMock(side_effect=["_participant_msg_", fake_timer_msg])
     inter.followup = AsyncMock()
+    inter.followup.send = AsyncMock(side_effect=[None, fake_timer_msg])
 
     fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
     fake_voice_client = AsyncMock()
@@ -263,10 +263,11 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     # Modal interaction must be deferred (ephemeral ack, no channel noise).
     inter.response.defer.assert_called_once_with(ephemeral=True)
 
-    # Participant prompt posted first.
-    assert inter.channel.send.call_count == 2
-    first_call_args = inter.channel.send.call_args_list[0]
-    assert first_call_args.args == (_MSG_PARTICIPANT_PROMPT,)
+    # Participant prompt posted first via followup (bypasses per-channel perms).
+    assert inter.followup.send.call_count == 2
+    first_call = inter.followup.send.call_args_list[0]
+    assert first_call.args == (_MSG_PARTICIPANT_PROMPT,)
+    assert first_call.kwargs.get("ephemeral") is False
 
     # Voice channel fetched with the correct id.
     mock_fetch.assert_called_once_with(444)  # voice_channel_id seeded above
@@ -277,12 +278,14 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     # Session advanced to ACTIVE.
     assert session.state == SessionState.ACTIVE
 
-    # Active timer message posted second (after participant prompt).
-    second_call_args = inter.channel.send.call_args_list[1]
+    # Active timer message posted second via followup (wait=True for message handle).
+    second_call = inter.followup.send.call_args_list[1]
     expected_initial = _ACTIVE_TIMER_FMT.format(
         intention="finish the changelog", mm=25, ss=0
     )
-    assert second_call_args.args == (expected_initial,)
+    assert second_call.args == (expected_initial,)
+    assert second_call.kwargs.get("ephemeral") is False
+    assert second_call.kwargs.get("wait") is True
 
     # Countdown task scheduled.
     mock_create_task.assert_called_once()
@@ -310,7 +313,6 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
 
     inter = AsyncMock()
     inter.response = AsyncMock()
-    inter.channel = AsyncMock()
     inter.followup = AsyncMock()
 
     fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
@@ -327,10 +329,15 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
     assert session is not None
     assert session.state == SessionState.CANCELLED
 
-    # Ephemeral error message sent to the user.
-    inter.followup.send.assert_called_once_with(
-        _MSG_VOICE_CONNECT_FAILED, ephemeral=True
-    )
+    # Participant prompt posted first (before voice connect attempt), then the
+    # ephemeral error on failure — two followup sends total.
+    assert inter.followup.send.call_count == 2
+    first_call = inter.followup.send.call_args_list[0]
+    assert first_call.args == (_MSG_PARTICIPANT_PROMPT,)
+    assert first_call.kwargs.get("ephemeral") is False
+    second_call = inter.followup.send.call_args_list[1]
+    assert second_call.args == (_MSG_VOICE_CONNECT_FAILED,)
+    assert second_call.kwargs.get("ephemeral") is True
 
     # No countdown task scheduled.
     mock_create_task.assert_not_called()
