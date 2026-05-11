@@ -47,6 +47,11 @@ The consistent pair: **🍵** (tea moments — welcome, end-of-session) and
 **⏳** (active timer). Secondary emoji used sparingly:
 - 🌿 — accent on success / "kept your intention"
 - ✨ — small flourish on session completion
+- 🥅 — accent on goal-setting (intention modal prompt)
+- ✅ / ⛔ — follow-up reactions on the Reflect-embed message.
+  Pre-populated by the bot. The current facilitator's reaction is
+  **authoritative** for `completed_intention` (✅ = 1, ⛔ = 0). Other
+  participants' reactions are logged-only social signal.
 
 Do not introduce new emoji without updating this section.
 
@@ -60,9 +65,9 @@ Do not introduce new emoji without updating this section.
 | Timer-pick button row | Same message as welcome (or follow-up) | 10 / 25 / 50 minute buttons | Yes — buttons |
 | Intention modal | Triggered by timer-pick | Free-form text capture | Yes — modal |
 | Active timer embed | Same channel | Cycles `mm:ss` every 10s | No (display only) |
-| End-of-session embed | Same channel | "Time's up — tea time!"; reverie plays in voice | No (display) |
-| Follow-up button row | Same message as end-of-session | Y / N + optional "why" text | Yes — buttons |
-| Follow-up reaction window | Same message | 3-min reaction window for participants (optional) | Yes — emoji react |
+| Session-complete embed | Same channel | "Session complete!" + @-mentions of voice members; reverie plays in voice | No (display) |
+| Reflect embed | Same channel | "[Reflect] Share how your session went!" + facilitator prompt + pre-populated ✅/⛔ | Yes — emoji react |
+| Follow-up "why" prompt | Same channel | Posts only when facilitator reacts ⛔ — invites public reflection (not bookkept) | No (display) |
 | Refusal message | Same channel | "Session already running here — try another channel" | No (display, ephemeral to invoker) |
 
 ### Welcome embed copy (canonical)
@@ -83,6 +88,63 @@ match this verbatim — do not paraphrase in code.
 - **Accent color:** `#7B9D6F` (matcha sage).
 - **Buttons (attached to the same message):** `10 min`, `25 min`,
   `50 min` — secondary style.
+
+### End-of-session embed copy (canonical)
+
+Source of truth for the end-of-session embed. The bot's runtime
+output must match this verbatim — do not paraphrase in code.
+
+- **Title:** `✨ Session complete!`
+- **Body:** `🌿 Sip your tea, stretch, and notice your progress.`
+- **Accent color:** `#3F5E4A` (steeping forest).
+- **Content (above embed; @-mentions of current voice channel members
+  at end-tick, with Ocha filtered out — mentions ping):**
+
+  ```
+  Time's up, <@id1> <@id2> <@id3>!
+  ```
+
+  If the voice channel is empty (everyone left mid-session), `content`
+  is just `"Time's up!"` with no mention list. The list always
+  reflects current voice membership, so it adapts to handoff and
+  late joiners alike.
+
+Posted as a single `channel.send(content=..., embed=...)` call.
+Mentions live in `content` (they ping); they don't ping from embed
+description.
+
+### Reflect embed copy (canonical)
+
+Posted right after the Session-complete embed. The bot pre-populates
+✅ and ⛔ reactions on this message.
+
+- **Content (above embed; facilitator prompt with mention — pings):**
+
+  ```
+  Facilitator <@facilitator_id>! React ✅ if you finished, ⛔ if not.
+  ```
+
+- **Embed title:** `🌿 [Reflect]`
+- **Embed body:**
+
+  > Share how your session went!
+  > · React with emoji
+  > · Share in voice
+  > · Or type in chat
+
+- **Accent color:** `#3F5E4A` (steeping forest — matches Session-complete embed).
+
+### "Why" prompt copy (canonical)
+
+Posted only when the facilitator reacts ⛔. Plain-text channel
+message:
+
+```
+<@facilitator_id> — share what got in the way: type in chat or share in voice.
+```
+
+The bot does not capture the response (`followup_note` stays NULL).
+The reflection is social, not bookkept.
 
 ---
 
@@ -105,21 +167,29 @@ teamode:<session_id>:<purpose>[:<value>]
 
 Examples:
 - `teamode:42:timer:25` — pick 25-minute timer for session 42
-- `teamode:42:followup:yes` — facilitator's "yes" answer
-- `teamode:42:followup:end` — facilitator ends follow-up window early
 
 The session id makes interactions safe across concurrent sessions in
-different channels.
+different channels. After the T4.2 redesign, the only interactive
+component using a custom_id is the timer-pick button row; follow-up
+state is captured via ✅/⛔ reactions on the Reflect embed message
+(see § "Authorization rules" and § "Emoji palette").
 
 ### Authorization rules
 - Timer pick / intention modal: facilitator only. Other clicks: ephemeral
   refusal "Only the facilitator can answer."
-- Follow-up Y/N: facilitator only.
-- Follow-up reaction window: anyone in voice channel may react with
-  thumbs up / down (social signal; not authoritative).
+- Follow-up ✅/⛔ reactions on the Reflect-embed message:
+  - **The current facilitator's reaction is authoritative.** ✅ →
+    `mark_completed(completed_intention=1)`. ⛔ →
+    `mark_completed(completed_intention=0)` + posts a public "why"
+    prompt (not bookkept — facilitator shares in voice or chat; bot
+    does not capture).
+  - Anyone else's reaction (including the bot's own pre-populated
+    reactions) is logged to console only and does **not** change
+    session state.
 - Facilitator handoff: when the original facilitator leaves voice, a new
   facilitator is selected from remaining voice members via `random.choice`
-  and announced in the channel.
+  and announced in the channel. The new facilitator becomes the
+  authoritative reactor for ✅/⛔ from that point on.
 
 ### Refusal behavior
 When `/teamode` is invoked while another session is active in the same

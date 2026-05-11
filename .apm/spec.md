@@ -1,6 +1,6 @@
 ---
 title: TeaMode
-modified: Spec creation by the Planner. Manager renamed package teamode/ → app/ before Stage 1 dispatch. User refreshed first participant prompt copy during Stage 3 smoke test.
+modified: Spec creation by the Planner. Manager renamed package teamode/ → app/ before Stage 1 dispatch. User refreshed first participant prompt copy during Stage 3 smoke test. User refreshed second participant prompt + end-of-session embed copy + broadened @-mention from facilitator-only to all voice members at end-tick before T4.2 dispatch. User redesigned end-of-session: dropped Y/N/End-early buttons, facilitator's ✅/⛔ reaction now authoritative for `completed_intention`, public "why" prompt on ⛔ (no chat capture) — before T4.2 follow-up dispatch.
 ---
 
 # APM Spec
@@ -148,7 +148,7 @@ keyed by `session_id`.
 | `pending` | `/teamode` invocation passes guard; row written to SQLite | Facilitator picks duration |
 | `intention_set` | Facilitator submits intention modal | Bot joins voice channel and starts timer |
 | `active` | Voice connection established; timer started | Timer reaches zero |
-| `followup` | Reverie plays; follow-up button row posted | Facilitator answers Y/N, OR 3-minute timeout, OR facilitator ends early |
+| `followup` | Reverie plays; Reflect embed posted with pre-populated ✅/⛔ reactions | Facilitator reacts ✅/⛔, OR 3-minute timeout |
 | `completed` (terminal) | Follow-up answered | — |
 | `followup_timeout` (terminal) | 3 min elapse with no facilitator answer | — |
 | `cancelled` (terminal) | Solo facilitator left voice and did not return within 5 min | — |
@@ -175,16 +175,13 @@ state survives a process restart.
                                                     └─ post active timer message
                                                          └─ countdown loop (edit every 10s)
                                                               └─ at zero:
-                                                                   ├─ post end-of-session embed (🍵🌿✨ flourish)
-                                                                   ├─ post participant follow-up prompt
-                                                                   │  ("Everyone — share how the session went")
+                                                                   ├─ post Session-complete embed (single msg: content=@-mentions of voice members, embed=✨ Session complete! / 🌿 …)
                                                                    ├─ play assets/reverie.wav in voice
-                                                                   ├─ @-mention facilitator
-                                                                   └─ post follow-up button row
-                                                                   └─ facilitator clicks [Y|N] OR timeout OR end-early
-                                                                        ├─ if N: prompt for "why" text
-                                                                        └─ UPDATE row (status, completed_intention, followup_note, ended_at)
-                                                                             └─ bot leaves voice
+                                                                   ├─ post Reflect embed (single msg: content=facilitator prompt, embed=🌿 [Reflect] …; bot pre-populates ✅/⛔ reactions)
+                                                                   └─ facilitator reacts ✅ OR ⛔ OR 3-min timeout
+                                                                        ├─ ✅: UPDATE row (status='completed', completed_intention=1, ended_at)
+                                                                        ├─ ⛔: UPDATE row (status='completed', completed_intention=0, ended_at) + post public "why" prompt (not bookkept)
+                                                                        └─ 3-min timeout: UPDATE row (status='followup_timeout', ended_at)
 ```
 
 ### Message visibility
@@ -228,7 +225,7 @@ during the session:
 | When | Prompt |
 |---|---|
 | Right after the facilitator submits their intention modal, before the timer starts | "🥅 **[Set Intention]** Please share your intention for this session in voice or type it in the chat." |
-| Right after the end-of-session embed, before the facilitator's Y/N follow-up | "Everyone — share how the session went, in chat or voice." |
+| Right after the Session-complete embed, before the facilitator's ✅/⛔ reaction | Reflect embed — title `🌿 [Reflect]`, body with bullet list (canonical copy in `.project-meta/UI-ADR.md` § "Reflect embed copy"). Bot pre-populates ✅ and ⛔ reactions. |
 
 The prompts are **plain text messages** in the channel — not embeds,
 not modals, no buttons. Anyone may respond by chatting in the channel
@@ -346,9 +343,10 @@ Playback."
 4. After playback completes, bot disconnects from voice.
 5. If the bot's voice connection drops mid-session, discord.py
    auto-reconnects. The session continues; do not crash.
-6. If `voice_client.play(...)` raises at zero, fall back to a text
-   `@-mention` of the facilitator (which produces a Discord
-   notification). Log the failure to console.
+6. If `voice_client.play(...)` raises at zero, the @-mention message
+   (which already mentions everyone in the voice channel) doubles as
+   the audio fallback — the Discord notification still fires. Log the
+   playback failure to console.
 
 ### Asset path
 
@@ -364,7 +362,7 @@ Playback."
 | Bot websocket drops, process alive | discord.py auto-reconnects with backoff. asyncio task continues; `asyncio.sleep` is unaffected. Pending edits may fail and retry; worst case, `mm:ss` is briefly stale. No special handling beyond logging. |
 | Bot process dies (laptop sleep, OOM, crash) | All in-memory state lost. On next startup, query for non-terminal `status` and `UPDATE status='crashed'` with `ended_at = now()`. Do not attempt resume. |
 | Voice connect fails at session start | Surface ephemeral error to facilitator; `status='cancelled'`. Session does not proceed without voice (the session contract requires the bot in voice). |
-| Voice playback fails at zero | Fall back to `@-mention` text. Continue with follow-up flow normally. |
+| Voice playback fails at zero | The @-mention message (always posted) provides the notification fallback. Continue with follow-up flow normally. |
 | Discord API degraded (5xx on edits or interactions) | Catch `discord.HTTPException` at boundaries. Log. Surface ephemeral message only when user-facing. Don't crash on transient errors. |
 | Modal text exceeds Discord's 4000-char cap | Discord rejects the submission client-side; user retries shorter. Bot does not need to validate length. |
 | User invokes `/teamode` from a server-text channel that happens to be linked to a voice channel they are not in | Falls through to the "not in voice" failure of the cumulative guard. |
