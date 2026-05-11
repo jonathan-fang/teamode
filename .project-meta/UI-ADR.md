@@ -77,14 +77,15 @@ Source of truth for the welcome embed. The bot's runtime output must
 match this verbatim — do not paraphrase in code.
 
 - **Title:** `🍵 Now Entering TeaMode`
-- **Body:**
+- **Body** (each line prefixed `### ` in the embed description for
+  heading-style weight):
 
-> Time for TeaMode!
-> · Grab your tea (or water/beverage of your choice),
-> · Clear your desk,
-> · And silence all distractions (like phones, impromptu meetings).
+> ### Time for TeaMode!
+> ### · Grab your tea (or water/beverage of your choice),
+> ### · Clear your desk,
+> ### · And silence all distractions (like phones, impromptu meetings).
 >
-> ⏳ **How long would you like to focus today?**
+> ### ⏳ **How long would you like to focus today?**
 
 - **Accent color:** `#7B9D6F` (matcha sage).
 - **Buttons (attached to the same message):** `5 min`, `10 min`,
@@ -97,9 +98,9 @@ output must match this verbatim — do not paraphrase in code.
 
 - **Title:** `✨ Session complete!`
 - **Body:** `🌿 Sip your tea, stretch, and notice your progress.`
-  - Rendered as `## 🌿 Sip your tea, stretch, and notice your progress.`
-    in the embed description — the `##` markdown promotes it to heading
-    weight for visual emphasis.
+  - Rendered as `### 🌿 Sip your tea, stretch, and notice your progress.`
+    in the embed description — the `###` markdown gives consistent
+    heading-style weight across all content embeds.
 - **Accent color:** `#3F5E4A` (steeping forest).
 - **Content (above embed; @-mentions of current voice channel members
   at end-tick, with Ocha filtered out — mentions ping):**
@@ -125,7 +126,7 @@ Posted right after the Session-complete embed. The bot pre-populates
 - **Content (above embed; plain prompt, no mention):**
 
   ```
-  [Follow-up] React ✅ if you finished, ⛔ if not.
+  [Follow-up] React with ✅ if you finished, or ⛔ if not.
   ```
 
   No facilitator @-mention — the Session-complete message immediately
@@ -134,12 +135,12 @@ Posted right after the Session-complete embed. The bot pre-populates
   visual hand-off cue.
 
 - **Embed title:** `🌿 [Reflect]`
-- **Embed body:**
+- **Embed body** (each line prefixed `### ` for heading-style weight):
 
-  > Share how your session went!
-  > · React with emoji
-  > · Share in voice
-  > · Or type in chat
+  > ### Share how your session went!
+  > ### · React with emoji
+  > ### · Share in voice
+  > ### · Or type in chat
 
 - **Accent color:** `#3F5E4A` (steeping forest — matches Session-complete embed).
 
@@ -254,6 +255,10 @@ them, not reconsider them.
   beat after the welcome embed), not post-modal-submit. This invites
   participants to share their intention before the timer is picked,
   paralleling the facilitator's modal.
+- **All content-embed body lines prefixed `### ` for consistent
+  heading-style weight.** Applies to the welcome, Session-complete, and
+  Reflect embeds. Refusal embeds are excluded — they remain plain body
+  text since heading weight feels wrong on a functional error.
 
 ---
 

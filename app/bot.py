@@ -410,7 +410,7 @@ class TeaModeBot:
         # Step b: Post Session-complete embed with the @-mention content.
         session_complete_embed = discord.Embed(
             title=_END_EMBED_TITLE,
-            description=f"## {_END_EMBED_BODY}",
+            description=f"### {_END_EMBED_BODY}",
             color=COLORS["end_of_session"],
         )
         await channel.send(content=mention_content, embed=session_complete_embed)
@@ -421,14 +421,14 @@ class TeaModeBot:
             logger.warning("Reverie playback failed for session %s", session_id)
 
         # Step d: Post Reflect message with facilitator prompt.
-        facilitator_prompt = "[Follow-up] React ✅ if you finished, ⛔ if not."
+        facilitator_prompt = "[Follow-up] React with ✅ if you finished, or ⛔ if not."
         reflect_embed = discord.Embed(
             title="🌿 [Reflect]",
             description=(
-                "Share how your session went!\n"
-                "· React with emoji\n"
-                "· Share in voice\n"
-                "· Or type in chat"
+                "### Share how your session went!\n"
+                "### · React with emoji\n"
+                "### · Share in voice\n"
+                "### · Or type in chat"
             ),
             color=COLORS["end_of_session"],
         )
@@ -732,11 +732,11 @@ def _build_welcome_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🍵 Now Entering TeaMode",
         description=(
-            "Time for TeaMode!\n"
-            "· Grab your tea (or water/beverage of your choice),\n"
-            "· Clear your desk,\n"
-            "· And silence all distractions (like phones, impromptu meetings).\n\n"
-            "⏳ **How long would you like to focus today?**"
+            "### Time for TeaMode!\n"
+            "### · Grab your tea (or water/beverage of your choice),\n"
+            "### · Clear your desk,\n"
+            "### · And silence all distractions (like phones, impromptu meetings).\n\n"
+            "### ⏳ **How long would you like to focus today?**"
         ),
         color=COLORS["active"],
     )
