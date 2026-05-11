@@ -33,6 +33,8 @@ _Empty._
 Valid ideas blocked on an external trigger or deferred until after V1
 ships. Promote to a release-target queue when ready.
 
+- make it easier to launch from desktop the teamode thing with source teamode secrets and venv.
+
 ### v2 — sharing and reach
 
 - **Shareable to one external server.** README + token + slash command
