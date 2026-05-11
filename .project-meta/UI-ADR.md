@@ -84,6 +84,41 @@ match this verbatim — do not paraphrase in code.
 - **Buttons (attached to the same message):** `10 min`, `25 min`,
   `50 min` — secondary style.
 
+### End-of-session embed copy (canonical)
+
+Source of truth for the end-of-session embed. The bot's runtime
+output must match this verbatim — do not paraphrase in code.
+
+- **Title:** `✨ Session complete!`
+- **Body:** `🌿 Sip your tea, stretch, and notice your progress.`
+- **Accent color:** `#3F5E4A` (steeping forest).
+- **Buttons (attached to the same message):** `Yes`, `No`, `End early`
+  (facilitator-only on each).
+
+### Second participant prompt (canonical)
+
+Source of truth for the post-session reflect prompt. Posted as a
+plain-text channel message right after the end-of-session embed.
+
+> 🌿 **[Reflect]** Share how your session went in voice or type it in the chat.
+
+### End-of-session @-mention (behavior)
+
+The bot posts a plain-text message that @-mentions every member
+currently in the session's voice channel (snapshot taken at end-tick,
+not at session start). The bot itself (Ocha) is filtered out. The
+text shape:
+
+```
+Time's up, <@id1> <@id2> <@id3>!
+```
+
+If the voice channel is empty (everyone left mid-session), the bot
+posts `Time's up!` with no mention list — or skips entirely (worker's
+judgment). The mention list always reflects current voice membership,
+not the original facilitator set, so it adapts to facilitator handoff
+and late joiners alike.
+
 ---
 
 ## Interaction model
