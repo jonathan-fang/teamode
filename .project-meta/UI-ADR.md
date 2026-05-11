@@ -65,6 +65,25 @@ Do not introduce new emoji without updating this section.
 | Follow-up reaction window | Same message | 3-min reaction window for participants (optional) | Yes — emoji react |
 | Refusal message | Same channel | "Session already running here — try another channel" | No (display, ephemeral to invoker) |
 
+### Welcome embed copy (canonical)
+
+Source of truth for the welcome embed. The bot's runtime output must
+match this verbatim — do not paraphrase in code.
+
+- **Title:** `🍵 TeaMode`
+- **Body:**
+
+> Time for TeaMode!
+> · Grab your tea (or water/beverage of your choice),
+> · Clear your desk,
+> · And silence all distractions (like phones, impromptu meetings).
+>
+> ⏳ **How long would you like to focus today?**
+
+- **Accent color:** `#7B9D6F` (matcha sage).
+- **Buttons (attached to the same message):** `10 min`, `25 min`,
+  `50 min` — secondary style.
+
 ---
 
 ## Interaction model

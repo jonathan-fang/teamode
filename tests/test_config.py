@@ -47,3 +47,23 @@ def test_empty_token_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(RuntimeError, match="DISCORD_BOT_TOKEN is required"):
         _reload_config()
+
+
+def test_dev_guild_id_default_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TEAMODE_DEV_GUILD_ID is None when the env var is unset."""
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token-abcd")
+    monkeypatch.delenv("TEAMODE_DEV_GUILD_ID", raising=False)
+
+    cfg = _reload_config()
+
+    assert cfg.TEAMODE_DEV_GUILD_ID is None  # type: ignore[attr-defined]
+
+
+def test_dev_guild_id_populated_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TEAMODE_DEV_GUILD_ID picks up the env var value when set."""
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token-abcd")
+    monkeypatch.setenv("TEAMODE_DEV_GUILD_ID", "123456789012345678")
+
+    cfg = _reload_config()
+
+    assert cfg.TEAMODE_DEV_GUILD_ID == "123456789012345678"  # type: ignore[attr-defined]
