@@ -23,6 +23,33 @@ title: TeaMode
 
 ## Stage Summaries
 
+### Stage 6 — Cleanup + V1 Release
+
+Two Tasks closed the V1 release. T6.1 synced README and docs, created `changelog.md`, audited deps, and pinned `pip-audit` + `vulture` as dev tools. T6.2 tagged `v26Q2.0.0` on the merge commit and pushed to `origin/main`. Worker returned Partial on T6.1 due to an upstream-blocked CVE; Manager triaged inline with User and resolved as documented known issue rather than holding the release.
+
+T6.1 (`chore/v1-release-prep`, merged `8ab3323`):
+- **README sync (commit `5383850`):** dropped all `_planned_` / `(planned)` markers; corrected timer durations to 5/10/25/50; replaced the outdated Yes/No-button + 👍/👎-reaction example with the actually-shipped Session-complete embed → reverie → Reflect embed → facilitator ✅/⛔ flow; added `/handoff @user` row to the guards table; corrected `teamode/` → `app/` in the repo-layout tree.
+- **`changelog.md` created:** v26Q2.0.0 feature list (slash command + guard, full session flow, durations 5/10/25/50, empty intention, participant prompt, reverie, ✅/⛔ Reflect, 3-min watchdog, auto + manual handoff, solo grace, crash reconciliation, SQLite log) plus "Not in V1" deferrals.
+- **Docs audit:** `docs/sqlite-schema.md` had `(Proposed)` stripped from the title and `duration_minutes` corrected to "5, 10, 25, or 50". Other docs accurate; no changes.
+- **`pip-audit` 2.10.0 pinned** under `# Dev` in `requirements.txt`. Audit surfaced two CVEs:
+  - **CVE-2025-71176 (pytest):** remediated cleanly — bumped `pytest==8.3.5→9.0.3` and `pytest-asyncio==0.26.0→1.3.0` (0.26.0 caps `pytest<9`). All 121 tests pass on the new pins.
+  - **CVE-2025-69277 (PyNaCl):** **unresolvable** at V1 — `discord.py[voice]==2.7.1` (latest on PyPI as of 2026-05-11) pins `PyNaCl<1.6,>=1.5.0`, fix requires `PyNaCl==1.6.2`. pip raises `ResolutionImpossible`. Worker returned Partial with full diagnostic. Manager + User triaged: low practical risk (atypical custom-crypto paths; discord.py uses only standard voice encryption), documented as a Known Issue in `changelog.md`, will revisit when discord.py releases with PyNaCl>=1.6 support.
+- **Manager follow-up commit `6b17d80`:** added `vulture==2.16` to `requirements.txt` dev section; named `vulture` explicitly as the dead-code scanner in `.project-meta/conventions.md` § Release Process (the existing "Scan for dead code; remove" step). Vulture run at confidence ≥80 returned zero findings on `app/ teamode.py`.
+- **`pip list --outdated`** run informationally: only PyNaCl (the documented blocker), `pip` itself (meta), and `pyright`/`ruff` patches (dev tools — non-blocking per conventions § Dependency Maintenance monthly cadence).
+
+T6.2 (no branch — Manager-driven, no worker dispatch): composed annotated tag message summarising V1 deliverables and explicitly noting the PyNaCl known issue. Tagged `v26Q2.0.0` on merge commit `8ab3323`. User approved push. `git push origin main` + `git push origin v26Q2.0.0` both succeeded.
+
+Stage verification: final pipeline on `main` post-T6.1-merge — ruff format check clean, ruff check clean, 121 pytest passing, pyright 0 errors / 0 warnings, vulture 0 findings at confidence ≥80, `scan_injection.sh` flagged only the documented pre-existing false positives, `pip-audit` flagged only the documented PyNaCl known issue.
+
+**Carry-forward beyond V1:** post-release backlog (V1 monitoring / V1.x):
+- Discord smoke-test bundle deferred from Stages 4 and 5: non-facilitator reaction logged-only, 3-min Reflect-timeout, manual `/handoff` happy path + refusals, auto RNG handoff, solo-grace 5-min timeout, solo-grace rejoin cancel, wifi-drop reconnect tolerance (T5.4 plan). Eight live-Discord paths total.
+- ffmpeg startup probe (TODO.md v1.x): emit a WARNING log line when `shutil.which("ffmpeg")` returns None so the silent-disconnect failure mode is diagnosable.
+- PyNaCl CVE-2025-69277: revisit when discord.py releases with PyNaCl>=1.6 support.
+
+**Task Logs:**
+- task-06-01.log.md
+- (T6.2 had no worker dispatch; this Stage summary stands in for its log.)
+
 ### Stage 5 — Edge Cases
 
 Four Tasks delivered facilitator handoff (auto RNG + manual `/handoff` command), solo-facilitator 5-minute grace watchdog, crash reconciliation closure (Plan-aligned test reorganisation; the wiring itself shipped earlier in T1.2/T2.2), and reconnect-tolerance documentation. All four Tasks clean first-pass on Sonnet workers, sequential dispatch. Manager 2 → Manager 3 handoff happened at the Stage 4 close / Stage 5 open boundary — Manager 3 ran all four Stage 5 dispatches.

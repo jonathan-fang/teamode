@@ -1,5 +1,6 @@
 ---
 title: TeaMode
+completed_at: 2026-05-11T12:13:30Z
 ---
 
 # APM Tracker
@@ -16,12 +17,7 @@ title: TeaMode
 
 **Stage 5:** Complete
 
-**Stage 6:**
-
-| Task | Status | Domain | Branch |
-|------|--------|--------|--------|
-| 6.1 | Ready | core | |
-| 6.2 | Waiting: 6.1 | core | |
+**Stage 6:** Complete — V1 tagged as `v26Q2.0.0` and pushed to `origin/main`.
 
 ## Version Control
 
