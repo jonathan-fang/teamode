@@ -128,6 +128,46 @@ You should see:
 Then in your dev guild, `/teamode` should be available immediately
 when invoked from a voice channel's text chat.
 
+## Reconnect tolerance verification
+
+Validates that the session survives a transient gateway drop. discord.py
+handles reconnect automatically; this checklist confirms the integration
+holds end-to-end.
+
+### Setup
+
+- WSL host with `DISCORD_BOT_TOKEN` set and `TEAMODE_DEV_GUILD_ID` configured.
+- A dev guild voice channel the bot is authorised to join.
+- Ability to toggle the host's wifi (or a Linux interface, e.g. `sudo ip link set wlan0 down`).
+
+### Steps
+
+1. Start Ocha: `cd ~/WSL/github.com/jonathan-fang/teamode && source .venv/bin/activate && python3 teamode.py`
+2. Run `/teamode` in a voice channel's text chat. Pick the **10 min** duration. Submit an intention (any text).
+3. Wait until the active timer message shows roughly `⏳ 07:00` (≈3 minutes elapsed).
+4. Disable wifi for **30 seconds** (e.g. `sudo ip link set wlan0 down; sleep 30; sudo ip link set wlan0 up`).
+5. Observe:
+   - During the outage, the timer message stops updating. This is expected.
+   - After reconnect, the timer message resumes editing within one or two 10-second cycles.
+6. Let the session run to zero. Expected:
+   - Reverie plays in voice.
+   - Session-complete embed posts.
+   - Reflect embed posts with pre-populated ✅/⛔.
+7. React ✅ as facilitator. Confirm SQLite row reaches `status='completed'`:
+   ```bash
+   sqlite3 sessions.db "SELECT id, status, completed_intention FROM sessions ORDER BY id DESC LIMIT 1;"
+   ```
+
+### Failure modes
+
+- If the timer never resumes editing after reconnect: file a follow-up — the countdown task may have raised on a stale message handle.
+- If reverie does not play at zero: check `ffmpeg` is on PATH (`which ffmpeg`). If yes, file a follow-up.
+- If `/teamode` returns "session already active in this channel" after the outage: registry is in sync but the prior session never ended. Use `/handoff` to transfer, or restart the bot to let crash reconciliation clean up.
+
+### Acceptance
+
+Test passes if the session reaches `status='completed'` after a 30-second wifi outage at minute 3 of a 10-minute timer. If it fails, open a follow-up before the Stage 5 close — do not silently mark deferred.
+
 ## What changes for V2 (deployment, not now)
 
 If we later promote to a Linux VPS or make the bot installable on

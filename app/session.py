@@ -377,6 +377,11 @@ async def run_countdown(
         Injectable monotonic clock (default: ``time.monotonic``). Tests inject
         a fake that is driven by the fake sleep.
     """
+    # Reconnect tolerance: this coroutine uses asyncio.sleep, which is
+    # unaffected by Discord websocket state. If the gateway drops mid-
+    # session, discord.py auto-reconnects with backoff; pending message
+    # edits queue and retry. Worst case: the mm:ss display is briefly
+    # stale until the next successful edit cycle.
     total_seconds = duration_minutes * 60
     start = monotonic()
 
