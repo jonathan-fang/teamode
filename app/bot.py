@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import sqlite3
 from dataclasses import dataclass, field
 from typing import cast
@@ -252,6 +253,7 @@ class TeaModeBot:
         self.client.event(self.on_ready)
         self.client.event(self.on_interaction)
         self.client.event(self.on_raw_reaction_add)
+        self.client.event(self.on_voice_state_update)
 
         # Register the slash command on this instance.
         self._register_command()
@@ -538,6 +540,73 @@ class TeaModeBot:
                     "type in chat or share in voice."
                 )
 
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        """Automatic facilitator handoff when the facilitator leaves the voice channel.
+
+        Fires whenever any guild member's voice state changes.  Only acts
+        when the facilitator leaves a channel that has an in-progress session
+        with at least one remaining human member.
+
+        T5.2 seam: the case where the facilitator leaves and no other humans
+        remain (solo-grace logic) is intentionally left unhandled here.
+        """
+        # Step 1 — Did this member just leave a voice channel?
+        if before.channel is None:
+            return
+        if after.channel is not None and after.channel.id == before.channel.id:
+            return  # Same channel — not a leave event.
+
+        # Step 2 — Is there an in-progress session in the channel they left?
+        session = self._registry.find_active_in_voice_channel(str(before.channel.id))
+        if session is None:
+            return
+
+        # Step 3 — Is the leaver the current facilitator?
+        if str(member.id) != session.facilitator_id:
+            return
+
+        # Step 4 — Count remaining human members (exclude the leaver and the bot).
+        bot_id = self.client.user.id if self.client.user else None
+        remaining = [
+            m
+            for m in before.channel.members
+            if not m.bot and m.id != member.id and m.id != bot_id
+        ]
+
+        if not remaining:
+            # T5.2 seam: solo-grace handling goes here when that Task is implemented.
+            return
+
+        # Step 5 — Pick a new facilitator at random and record the handoff.
+        new_facilitator = random.choice(remaining)
+        old_facilitator_id = (
+            session.facilitator_id
+        )  # snapshot before mark_handoff updates it
+        self._registry.mark_handoff(
+            session_id=session.session_id,
+            handoff_facilitator_id=str(new_facilitator.id),
+        )
+
+        # Step 6 — Announce in the text channel.
+        channel = self.client.get_channel(int(session.text_channel_id))
+        if channel is not None:
+            content = (
+                f"<@{old_facilitator_id}> left — <@{new_facilitator.id}>,"
+                " you're now the facilitator."
+            )
+            try:
+                await channel.send(content)  # type: ignore[union-attr]
+            except discord.HTTPException:
+                logger.exception(
+                    "Failed to announce auto handoff for session %s",
+                    session.session_id,
+                )
+
     async def _on_countdown_tick(self, session_id: int, seconds_remaining: int) -> None:
         """Tick callback injected into ``run_countdown``.
 
@@ -606,7 +675,7 @@ class TeaModeBot:
     # ------------------------------------------------------------------
 
     def _register_command(self) -> None:
-        """Register /teamode on the command tree.
+        """Register /teamode and /handoff on the command tree.
 
         Guild-scoped when TEAMODE_DEV_GUILD_ID is set (instant propagation
         during dev); global registration is skipped for MVP — global commands
@@ -625,6 +694,19 @@ class TeaModeBot:
         )
         async def teamode(interaction: discord.Interaction) -> None:
             await self._handle_teamode(interaction)
+
+        @self.tree.command(
+            name="handoff",
+            description="Transfer the facilitator role to another voice-channel member.",
+            guild=guild_object,
+        )
+        @app_commands.describe(
+            member="The voice-channel member to make the new facilitator."
+        )
+        async def handoff(
+            interaction: discord.Interaction, member: discord.Member
+        ) -> None:
+            await self._handle_handoff(interaction, member)
 
     # ------------------------------------------------------------------
     # Slash command handler
@@ -712,6 +794,82 @@ class TeaModeBot:
         else:
             participant_prompt = _MSG_PARTICIPANT_PROMPT
         await interaction.followup.send(participant_prompt, ephemeral=False)
+
+    async def _handle_handoff(
+        self, interaction: discord.Interaction, member: discord.Member
+    ) -> None:
+        """Handle the /handoff slash command.
+
+        Validates that the invoker is the current facilitator of an active
+        session, then transfers the role to the specified voice-channel member.
+        """
+
+        # Guard 1 — Session must be active in this channel.
+        session = self._registry.find_active_in_text_channel(
+            str(interaction.channel.id) if interaction.channel is not None else ""  # type: ignore[union-attr]
+        )
+        if session is None:
+            embed = discord.Embed(
+                description="No active TeaMode session in this channel.",
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Guard 2 — Invoker must be the current facilitator.
+        if str(interaction.user.id) != session.facilitator_id:
+            embed = discord.Embed(
+                description="Only the facilitator can hand off the role.",
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Guard 3 — Target must not be the invoker themselves.
+        if member.id == interaction.user.id:
+            embed = discord.Embed(
+                description="You are already the facilitator.",
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Guard 4 — Target must be a human (not a bot).
+        if member.bot:
+            embed = discord.Embed(
+                description="Pick a human voice-channel member.",
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Guard 5 — Target must be present in the voice channel.
+        voice_channel = self.client.get_channel(int(session.voice_channel_id))
+        if voice_channel is None or member not in voice_channel.members:  # type: ignore[union-attr]
+            embed = discord.Embed(
+                description="Target must be in the voice channel.",
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # All guards passed — perform the handoff.
+        old_facilitator_id = (
+            session.facilitator_id
+        )  # snapshot before mark_handoff updates it
+        self._registry.mark_handoff(
+            session_id=session.session_id,
+            handoff_facilitator_id=str(member.id),
+        )
+
+        content = (
+            f"<@{old_facilitator_id}> handed off — <@{member.id}>,"
+            " you're now the facilitator."
+        )
+        await interaction.response.send_message(
+            content,
+            allowed_mentions=discord.AllowedMentions(users=True),
+        )
 
     def run(self, token: str) -> None:
         """Start the Discord event loop."""
