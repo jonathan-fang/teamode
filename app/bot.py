@@ -269,6 +269,8 @@ class TeaModeBot:
         # reactions intent: required to receive on_raw_reaction_add events.
         intents.reactions = True
 
+        # discord.py auto-reconnects the gateway with exponential backoff on
+        # websocket drop. No reconnect handling needed in our code.
         self.client = discord.Client(intents=intents)
         self.tree = app_commands.CommandTree(self.client)
 
