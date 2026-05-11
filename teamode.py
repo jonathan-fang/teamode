@@ -21,6 +21,8 @@ def main() -> None:
 
     conn = db.init_db(TEAMODE_DB_PATH)
 
+    # Reconciliation must run after init_db (table must exist) and before the
+    # gateway starts (avoid racing a fresh /teamode invocation).
     reconciled = db.reconcile_crashed_sessions(conn)
     logger.info("Reconciled %d crashed session(s) on startup", reconciled)
 
