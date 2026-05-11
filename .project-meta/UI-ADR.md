@@ -73,9 +73,10 @@ match this verbatim — do not paraphrase in code.
 - **Title:** `🍵 TeaMode`
 - **Body:**
 
-> Time for TeaMode! Grab your tea (or water/beverage of your choice),
-> clear your desk, and silence all distractions (like phones,
-> impromptu meetings).
+> Time for TeaMode!
+> · Grab your tea (or water/beverage of your choice),
+> · Clear your desk,
+> · And silence all distractions (like phones, impromptu meetings).
 >
 > ⏳ **How long would you like to focus today?**
 

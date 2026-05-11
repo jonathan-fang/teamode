@@ -205,9 +205,10 @@ def _build_welcome_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🍵 TeaMode",
         description=(
-            "Time for TeaMode! Grab your tea (or water/beverage of your choice), "
-            "clear your desk, and silence all distractions (like phones, "
-            "impromptu meetings).\n\n"
+            "Time for TeaMode!\n"
+            "· Grab your tea (or water/beverage of your choice),\n"
+            "· Clear your desk,\n"
+            "· And silence all distractions (like phones, impromptu meetings).\n\n"
             "⏳ **How long would you like to focus today?**"
         ),
         color=COLORS["active"],
