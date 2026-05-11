@@ -1,6 +1,6 @@
 ---
 title: TeaMode
-modified: Spec creation by the Planner. Manager renamed package teamode/ → app/ before Stage 1 dispatch. User refreshed first participant prompt copy during Stage 3 smoke test. User refreshed second participant prompt + end-of-session embed copy + broadened @-mention from facilitator-only to all voice members at end-tick before T4.2 dispatch.
+modified: Spec creation by the Planner. Manager renamed package teamode/ → app/ before Stage 1 dispatch. User refreshed first participant prompt copy during Stage 3 smoke test. User refreshed second participant prompt + end-of-session embed copy + broadened @-mention from facilitator-only to all voice members at end-tick before T4.2 dispatch. User redesigned end-of-session: dropped Y/N/End-early buttons, facilitator's ✅/⛔ reaction now authoritative for `completed_intention`, public "why" prompt on ⛔ (no chat capture) — before T4.2 follow-up dispatch.
 ---
 
 # APM Spec
@@ -148,7 +148,7 @@ keyed by `session_id`.
 | `pending` | `/teamode` invocation passes guard; row written to SQLite | Facilitator picks duration |
 | `intention_set` | Facilitator submits intention modal | Bot joins voice channel and starts timer |
 | `active` | Voice connection established; timer started | Timer reaches zero |
-| `followup` | Reverie plays; follow-up button row posted | Facilitator answers Y/N, OR 3-minute timeout, OR facilitator ends early |
+| `followup` | Reverie plays; Reflect embed posted with pre-populated ✅/⛔ reactions | Facilitator reacts ✅/⛔, OR 3-minute timeout |
 | `completed` (terminal) | Follow-up answered | — |
 | `followup_timeout` (terminal) | 3 min elapse with no facilitator answer | — |
 | `cancelled` (terminal) | Solo facilitator left voice and did not return within 5 min | — |
@@ -175,16 +175,13 @@ state survives a process restart.
                                                     └─ post active timer message
                                                          └─ countdown loop (edit every 10s)
                                                               └─ at zero:
-                                                                   ├─ post end-of-session embed (✨ Session complete! / 🌿 …)
-                                                                   ├─ post participant follow-up prompt
-                                                                   │  ("🌿 **[Reflect]** …")
+                                                                   ├─ post Session-complete embed (single msg: content=@-mentions of voice members, embed=✨ Session complete! / 🌿 …)
                                                                    ├─ play assets/reverie.wav in voice
-                                                                   ├─ @-mention everyone currently in voice (snapshot at end-tick)
-                                                                   └─ post follow-up button row
-                                                                   └─ facilitator clicks [Y|N] OR timeout OR end-early
-                                                                        ├─ if N: prompt for "why" text
-                                                                        └─ UPDATE row (status, completed_intention, followup_note, ended_at)
-                                                                             └─ bot leaves voice
+                                                                   ├─ post Reflect embed (single msg: content=facilitator prompt, embed=🌿 [Reflect] …; bot pre-populates ✅/⛔ reactions)
+                                                                   └─ facilitator reacts ✅ OR ⛔ OR 3-min timeout
+                                                                        ├─ ✅: UPDATE row (status='completed', completed_intention=1, ended_at)
+                                                                        ├─ ⛔: UPDATE row (status='completed', completed_intention=0, ended_at) + post public "why" prompt (not bookkept)
+                                                                        └─ 3-min timeout: UPDATE row (status='followup_timeout', ended_at)
 ```
 
 ### Message visibility
@@ -228,7 +225,7 @@ during the session:
 | When | Prompt |
 |---|---|
 | Right after the facilitator submits their intention modal, before the timer starts | "🥅 **[Set Intention]** Please share your intention for this session in voice or type it in the chat." |
-| Right after the end-of-session embed, before the facilitator's Y/N follow-up | "🌿 **[Reflect]** Share how your session went in voice or type it in the chat." |
+| Right after the Session-complete embed, before the facilitator's ✅/⛔ reaction | Reflect embed — title `🌿 [Reflect]`, body with bullet list (canonical copy in `.project-meta/UI-ADR.md` § "Reflect embed copy"). Bot pre-populates ✅ and ⛔ reactions. |
 
 The prompts are **plain text messages** in the channel — not embeds,
 not modals, no buttons. Anyone may respond by chatting in the channel
