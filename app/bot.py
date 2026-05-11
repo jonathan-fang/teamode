@@ -68,6 +68,9 @@ _END_EMBED_BODY = "🌿 Sip your tea, stretch, and notice your progress."
 # Follow-up timeout per Spec § "Edge Cases" (3-minute watchdog).
 _FOLLOWUP_TIMEOUT_SECONDS = 180
 
+# Solo-facilitator grace window: 5 minutes before auto-cancel.
+_SOLO_GRACE_SECONDS = 300
+
 
 def _format_timer(seconds_remaining: int) -> str:
     """Format *seconds_remaining* as ``mm:ss`` (zero-padded)."""
@@ -166,6 +169,9 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
             self._bot._registry.mark_cancelled(session_id=self._session_id)
             return
 
+        # Stash the voice client so the solo-grace flow can disconnect it.
+        self._bot._voice_clients[self._session_id] = voice_client
+
         # --- Advance to ACTIVE and post the timer message ---
         self._bot._registry.mark_active(session_id=self._session_id)
         assert session.duration_minutes is not None
@@ -196,8 +202,10 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
                 on_tick=lambda s: self._bot._on_countdown_tick(session_id, s),
             )
             self._bot._registry.mark_followup(session_id=session_id)
-            # Clean up edit state.
+            # Clean up edit state and per-session resource dicts.
             self._bot._edit_states.pop(session_id, None)
+            self._bot._voice_clients.pop(session_id, None)
+            self._bot._countdown_tasks.pop(session_id, None)
             # Run the full end-of-session sequence.
             await self._bot._run_end_of_session(
                 session_id=session_id,
@@ -205,7 +213,8 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
                 channel=channel,
             )
 
-        asyncio.create_task(_run_and_followup())
+        task = asyncio.create_task(_run_and_followup())
+        self._bot._countdown_tasks[session_id] = task
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +248,20 @@ class TeaModeBot:
         # Per-session Reflect message ids; maps session_id → message.id.
         # Used by on_raw_reaction_add to identify which session a reaction belongs to.
         self._reflect_message_ids: dict[int, int] = {}
+
+        # Per-session voice client; populated after voice.connect succeeds.
+        # Cleared at normal end-of-session and by the solo-grace timeout flow.
+        self._voice_clients: dict[int, discord.VoiceClient] = {}
+
+        # Per-session countdown asyncio.Task; populated when _run_and_followup is
+        # scheduled. Cancelled by the solo-grace timeout to prevent the normal
+        # end-of-session sequence from racing in.
+        self._countdown_tasks: dict[int, asyncio.Task[None]] = {}
+
+        # Per-session solo-grace watchdog tasks; keyed by session_id.
+        # Armed when the facilitator leaves and no other humans remain.
+        # Cancelled on facilitator rejoin; self-clearing on timeout.
+        self._solo_grace_tasks: dict[int, asyncio.Task[None]] = {}
 
         intents = discord.Intents.default()
         intents.guilds = True
@@ -546,15 +569,35 @@ class TeaModeBot:
         before: discord.VoiceState,
         after: discord.VoiceState,
     ) -> None:
-        """Automatic facilitator handoff when the facilitator leaves the voice channel.
+        """Automatic facilitator handoff and solo-grace watchdog for voice events.
 
-        Fires whenever any guild member's voice state changes.  Only acts
-        when the facilitator leaves a channel that has an in-progress session
-        with at least one remaining human member.
+        Fires whenever any guild member's voice state changes.
 
-        T5.2 seam: the case where the facilitator leaves and no other humans
-        remain (solo-grace logic) is intentionally left unhandled here.
+        Join path: if the facilitator rejoins a channel with an active
+        session and a solo-grace watchdog is pending, cancel the watchdog.
+
+        Leave path: if the facilitator leaves a channel with an active session
+        and no other humans remain, arm the 5-minute solo-grace watchdog. If
+        other humans remain, pick a new facilitator at random (auto-handoff).
         """
+        # Detect a join into a voice channel: after.channel is set and either
+        # the member was not in voice before, or they moved to a different channel.
+        if after.channel is not None and (
+            before.channel is None or before.channel.id != after.channel.id
+        ):
+            joined_session = self._registry.find_active_in_voice_channel(
+                str(after.channel.id)
+            )
+            if (
+                joined_session is not None
+                and str(member.id) == joined_session.facilitator_id
+                and joined_session.session_id in self._solo_grace_tasks
+            ):
+                # Facilitator rejoined within the grace window — cancel watchdog.
+                task = self._solo_grace_tasks.pop(joined_session.session_id)
+                task.cancel()
+                # No need to await — the watchdog's CancelledError handler cleans up.
+
         # Step 1 — Did this member just leave a voice channel?
         if before.channel is None:
             return
@@ -579,7 +622,14 @@ class TeaModeBot:
         ]
 
         if not remaining:
-            # T5.2 seam: solo-grace handling goes here when that Task is implemented.
+            # Solo leave — arm the 5-minute rejoin watchdog.
+            # Defensive guard: if one is already pending, don't double-arm.
+            if session.session_id not in self._solo_grace_tasks:
+                task = asyncio.create_task(
+                    self._run_solo_grace(session_id=session.session_id),
+                    name=f"solo-grace:{session.session_id}",
+                )
+                self._solo_grace_tasks[session.session_id] = task
             return
 
         # Step 5 — Pick a new facilitator at random and record the handoff.
@@ -606,6 +656,76 @@ class TeaModeBot:
                     "Failed to announce auto handoff for session %s",
                     session.session_id,
                 )
+
+    async def _run_solo_grace(
+        self,
+        *,
+        session_id: int,
+        sleep_seconds: float = _SOLO_GRACE_SECONDS,
+    ) -> None:
+        """5-minute rejoin watchdog for solo facilitator-leave.
+
+        Sleeps ``sleep_seconds``. If cancelled (facilitator rejoined), exits
+        cleanly. If the sleep completes, terminates the session as
+        ``cancelled``: rewrites the timer message, cancels the countdown task,
+        disconnects voice, and writes status='cancelled' to SQLite.
+
+        ``sleep_seconds`` defaults to ``_SOLO_GRACE_SECONDS``. Tests pass a
+        small value (e.g. 0 or 0.01) to exercise the timeout path without
+        waiting 5 minutes.
+        """
+        try:
+            await asyncio.sleep(sleep_seconds)
+        except asyncio.CancelledError:
+            # Facilitator rejoined within the grace window — nothing to do.
+            return
+
+        # Timeout fired. Resolve resources defensively (pops are no-ops if missing).
+        countdown_task = self._countdown_tasks.pop(session_id, None)
+        voice_client = self._voice_clients.pop(session_id, None)
+        edit_state = self._edit_states.pop(session_id, None)
+        self._solo_grace_tasks.pop(session_id, None)
+
+        # 1) Cancel the countdown task so it doesn't trigger end-of-session.
+        if countdown_task is not None:
+            countdown_task.cancel()
+            try:
+                await countdown_task
+            except (asyncio.CancelledError, Exception):
+                # Best-effort: a swallowed exception here is acceptable —
+                # we're tearing the session down anyway.
+                pass
+
+        # 2) Rewrite the timer message.
+        if edit_state is not None:
+            try:
+                await edit_state.message.edit(
+                    content="Session ended — facilitator did not return."
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "Failed to edit timer message on solo-grace timeout for session %s",
+                    session_id,
+                )
+
+        # 3) Disconnect voice (no reverie).
+        if voice_client is not None:
+            try:
+                await voice.disconnect(voice_client)
+            except Exception:
+                logger.exception(
+                    "Failed to disconnect voice on solo-grace timeout for session %s",
+                    session_id,
+                )
+
+        # 4) Write status='cancelled' to SQLite.
+        try:
+            self._registry.mark_cancelled(session_id=session_id)
+        except Exception:
+            logger.exception(
+                "Failed to mark session %s cancelled on solo-grace timeout",
+                session_id,
+            )
 
     async def _on_countdown_tick(self, session_id: int, seconds_remaining: int) -> None:
         """Tick callback injected into ``run_countdown``.
