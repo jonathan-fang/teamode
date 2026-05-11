@@ -14,14 +14,14 @@ title: TeaMode
 
 **Stage 4:** Complete
 
-**Stage 5:**
+**Stage 5:** Complete
+
+**Stage 6:**
 
 | Task | Status | Domain | Branch |
 |------|--------|--------|--------|
-| 5.1 | Ready | core | |
-| 5.2 | Waiting: 5.1 | core | |
-| 5.3 | Ready | core | |
-| 5.4 | Ready | core | |
+| 6.1 | Ready | core | |
+| 6.2 | Waiting: 6.1 | core | |
 
 ## Version Control
 
@@ -37,5 +37,7 @@ title: TeaMode
 - Holistic verification points flagged by Planner: end of Stages 2, 3, 4, 5, 6 — assess at each Stage close.
 - Worker false-positive note: in Task Prompts, name the package as "`app/`" explicitly. The repo root directory is also named `teamode/` on disk (per AGENTS.md tree diagram), and a worker re-reading AGENTS.md may conflate the two.
 - T3.3 scope drift carry-over: the worker added `voice_client.disconnect()` after `mark_followup` (around `app/bot.py:182`). Per Spec § Voice, disconnect should happen *after* `play_reverie_then_disconnect` in T4.1, not before. T4.1 prompt must explicitly remove this premature disconnect and replace with the proper sequence. (Resolved by T4.2 initial implementation.)
-- Stage 5 T5.1 scope: User-approved expansion to include manual facilitator handoff command. Command name is **`/handoff @user`** (NOT `/lead @user` — User renamed before dispatch). T5.1 should still also implement the automatic RNG handoff on voice-state-update per the existing Spec. Capture both behaviours in the T5.1 prompt.
+- Stage 5 T5.1 scope: User-approved expansion to include manual facilitator handoff command. Command name is **`/handoff @user`** (NOT `/lead @user` — User renamed before dispatch). T5.1 should still also implement the automatic RNG handoff on voice-state-update per the existing Spec. Capture both behaviours in the T5.1 prompt. **(Done — merged via `a81f725`.)**
+- T5.1 deferred smoke paths (User direction): only step 1 of the smoke checklist (slash command sync — `/handoff` appears) was confirmed; manual `/handoff` happy path + refusal branches, automatic RNG handoff, and solo-leave passthrough deferred to V1 monitoring. Track these for Stage 6 UAT planning alongside Stage 4's deferred non-facilitator and 3-min-timeout paths.
+- Stage 5 close (User direction): full Stage-close smoke bundle deferred to V1 monitoring. Six paths queued for Stage 6 UAT — T5.1 manual `/handoff` happy path, T5.1 manual `/handoff` refusal (any branch), T5.1 auto RNG handoff, T5.2 solo-grace rejoin cancel, T5.2 solo-grace 5-min timeout, T5.4 wifi-drop reconnect tolerance. Combined with the Stage 4 deferrals (non-facilitator reaction logged-only, 3-min followup timeout), Stage 6's UAT covers eight live-Discord paths total.
 

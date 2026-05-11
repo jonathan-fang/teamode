@@ -23,6 +23,30 @@ title: TeaMode
 
 ## Stage Summaries
 
+### Stage 5 — Edge Cases
+
+Four Tasks delivered facilitator handoff (auto RNG + manual `/handoff` command), solo-facilitator 5-minute grace watchdog, crash reconciliation closure (Plan-aligned test reorganisation; the wiring itself shipped earlier in T1.2/T2.2), and reconnect-tolerance documentation. All four Tasks clean first-pass on Sonnet workers, sequential dispatch. Manager 2 → Manager 3 handoff happened at the Stage 4 close / Stage 5 open boundary — Manager 3 ran all four Stage 5 dispatches.
+
+T5.1 (`feat/facilitator-handoff`, commit `53f5d0c feat(bot): facilitator handoff — auto RNG and /handoff command`, merged `a81f725`): Added `SessionRegistry.find_active_in_voice_channel(voice_channel_id)` returning the in-progress session (`INTENTION_SET` or `ACTIVE`). Wired `on_voice_state_update` listener with leave-detection → facilitator-only filter → remaining-humans count → `random.choice` over the rest → `registry.mark_handoff(...)` → text-channel announcement (`<@old> left — <@new>, you're now the facilitator.`). Manual scope expansion approved by User: `/handoff @user` slash command with five-stage guard (no active session, non-facilitator invoker, target-is-self, target-is-bot, target-not-in-voice) — each refusal an ephemeral muted-grey embed. Success path uses `interaction.response.send_message` with `discord.AllowedMentions(users=True)` and "handed off —" wording (distinct from the auto announcement's "left —" so the channel sees the difference). 10 new tests in `tests/test_session_handoff.py` cover all branches. Smoke step 1 (slash sync — `/handoff` appears in command picker) confirmed by User; steps 2–5 (manual happy path, refusals, auto RNG, solo passthrough) deferred to Stage-close bundle.
+
+T5.2 (`feat/solo-grace`, commit `fcd613c feat(bot): 5-minute solo-facilitator grace watchdog`, merged `d22b5b6`): Required upfront plumbing because the voice client and countdown task were closed over inside `IntentionModal.on_submit` and unreachable from `on_voice_state_update`. Added three per-session dicts on `TeaModeBot`: `_voice_clients`, `_countdown_tasks`, `_solo_grace_tasks`. Added `_SOLO_GRACE_SECONDS = 300` module constant. Added join-detection branch to `on_voice_state_update` (cancel watchdog if facilitator rejoins same VC). Extended the existing leave branch's empty-remaining path from no-op to "arm watchdog" with double-arm guard. `_run_solo_grace(session_id, sleep_seconds=300)` sleeps then cancels the countdown task, edits timer message to `"Session ended — facilitator did not return."`, calls `voice.disconnect(voice_client)` (no reverie), and writes `status='cancelled'`. The `sleep_seconds` parameter is the test-injection seam — production uses default. 10 new tests in `tests/test_session_solo_grace.py` cover watchdog timeout, missing-state graceful path, edit-failure resilience, listener arming, rejoin-cancel, non-facilitator-join-noop, different-channel-noop, bot-only-remaining arms, double-arm protection.
+
+T5.3 (`chore/reconciliation-test-reorg`, commit `e19dcdc refactor(db): move reconciliation tests to dedicated module`, merged `cce472e`): Closed the Plan deliverable cosmetically — the reconciliation wiring itself shipped in T1.2 (`db.reconcile_crashed_sessions`) and T2.2 (`teamode.py` startup wiring). Added an inline comment at the call site documenting the `init_db → reconcile → gateway` ordering invariant. Lifted the `conn` fixture from `test_db.py` to `tests/conftest.py` and moved the five reconcile tests into the Plan-named `tests/test_db_reconciliation.py`. No functional change; test count unchanged at 121. User chose dispatch-anyway over inline-close to maintain dispatch consistency across Stage 5.
+
+T5.4 (`docs/reconnect-tolerance`, commit `241ac93 docs(reconnect): document gateway reconnect tolerance and smoke plan`, merged `317555a`): Pure documentation. Two code comments at the relevant seams (top of `run_countdown` in `app/session.py` explaining `asyncio.sleep` is unaffected by websocket state and edits queue/retry transparently; above `discord.Client(...)` construction in `app/bot.py` noting discord.py handles reconnect with exponential backoff). New `## Reconnect tolerance verification` section appended to `docs/discord-bot-setup.md` with setup/steps/failure-modes/acceptance for a 30s wifi-drop smoke test at minute 3 of a 10-min session.
+
+Stage verification: full pipeline clean on `main` post-merge (121 tests pass, ruff clean, pyright 0 errors, scan_injection only pre-existing handoff-log false positives). Stage-close smoke bundle (T5.1 steps 2–5, T5.2 rejoin + timeout, T5.4 wifi drop) pending User execution — see Tracker Working Notes for the deferred-to-V1-monitoring carry-forward if User opts to defer rather than run.
+
+Memory notes added (none — Stage 5 had no surprising integration patterns that future Tasks would benefit from; existing notes about `MagicMock(spec=discord.Client)`, "patch where used", `AsyncMock`, and the `_install_fake_client_user` helper all carried forward unchanged).
+
+**Carry-forward for Stage 6:** All four Stage 5 deferred smoke tests carry to Stage 6 UAT, alongside the Stage 4 deferred non-facilitator-reaction-logged-only and 3-min-followup-timeout paths. T6.1 (final validation + docs sync, `pip-audit`) and T6.2 (V1 tag) are sequential by Plan; T6.1 promotes to Ready once Stage 5 closes here.
+
+**Task Logs:**
+- task-05-01.log.md
+- task-05-02.log.md
+- task-05-03.log.md
+- task-05-04.log.md
+
 ### Stage 4 — End-of-Session + Follow-up
 
 Two Tasks delivered reverie playback at zero and the full end-of-session UX (Session-complete embed, reverie, Reflect embed, facilitator-authoritative ✅/⛔ reactions, 3-minute timeout watchdog). T4.2 went through three design states before merging — initial buttons-based, redesigned to reactions-authoritative mid-Stage, and a pre-merge UX bundle adding 5-min timer, earlier participant prompt, empty modal acceptance, and `###` heading style. Manager 1 → Manager 2 handoff happened mid-T4.2 (Manager 1 hit context limit while drafting the reactions-redesign follow-up dispatch).
