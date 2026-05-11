@@ -16,8 +16,8 @@ title: TeaMode
 
 | Task | Status | Domain | Branch |
 |------|--------|--------|--------|
-| 4.1 | Active | core | feat/reverie-playback |
-| 4.2 | Waiting: 4.1 | discord | |
+| 4.1 | Done | core | |
+| 4.2 | Active | discord | feat/end-of-session-followup |
 
 ## Version Control
 
