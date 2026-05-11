@@ -12,12 +12,16 @@ title: TeaMode
 
 **Stage 3:** Complete
 
-**Stage 4:**
+**Stage 4:** Complete
+
+**Stage 5:**
 
 | Task | Status | Domain | Branch |
 |------|--------|--------|--------|
-| 4.1 | Done | core | |
-| 4.2 | Active | discord | feat/end-of-session-followup |
+| 5.1 | Ready | core | |
+| 5.2 | Waiting: 5.1 | core | |
+| 5.3 | Ready | core | |
+| 5.4 | Ready | core | |
 
 ## Version Control
 
