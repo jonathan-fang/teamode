@@ -8,12 +8,15 @@ title: TeaMode
 
 **Stage 1:** Complete
 
-**Stage 2:**
+**Stage 2:** Complete
+
+**Stage 3:**
 
 | Task | Status | Domain | Branch |
 |------|--------|--------|--------|
-| 2.1 | Done | core | |
-| 2.2 | Active | discord | feat/slash-command-welcome |
+| 3.1 | Active | core | feat/voice-plumbing |
+| 3.2 | Active | discord | feat/timer-intention |
+| 3.3 | Waiting: 3.1, 3.2 | discord | |
 
 ## Version Control
 
