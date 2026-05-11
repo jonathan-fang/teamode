@@ -6,6 +6,17 @@ the var is absent; tests must never require a live token.
 """
 
 import os
+import sqlite3
+
+import pytest
 
 # Must be set before any app.* import — conftest.py is loaded first.
 os.environ.setdefault("DISCORD_BOT_TOKEN", "test-stub-token")
+
+from app.db import init_db  # noqa: E402 — must come after env setup
+
+
+@pytest.fixture()
+def conn() -> sqlite3.Connection:
+    """Fresh in-memory DB with schema applied."""
+    return init_db(":memory:")
