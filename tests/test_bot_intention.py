@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
@@ -14,9 +14,11 @@ from app.bot import (
     TeaModeBot,
     _MSG_NOT_FACILITATOR,
     _MSG_PARTICIPANT_PROMPT,
+    _MSG_VOICE_CONNECT_FAILED,
+    _ACTIVE_TIMER_FMT,
 )
 from app.db import init_db
-from app.session import SessionRegistry
+from app.session import SessionRegistry, SessionState
 
 
 # ---------------------------------------------------------------------------
@@ -71,10 +73,21 @@ def _seed_session(registry: SessionRegistry, facilitator_id: int = 111) -> int:
     session = registry.create_pending_session(
         guild_id="222",
         text_channel_id="333",
-        voice_channel_id="333",
+        voice_channel_id="444",
         facilitator_id=str(facilitator_id),
     )
     return session.session_id
+
+
+def _seed_session_with_duration(
+    registry: SessionRegistry,
+    facilitator_id: int = 111,
+    duration_minutes: int = 25,
+) -> int:
+    """Insert a PENDING session with duration set, return its session_id."""
+    session_id = _seed_session(registry, facilitator_id=facilitator_id)
+    registry.set_duration(session_id=session_id, duration_minutes=duration_minutes)
+    return session_id
 
 
 # ---------------------------------------------------------------------------
@@ -189,8 +202,13 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     registry: SessionRegistry,
     conn: sqlite3.Connection,
 ) -> None:
-    """Submitting the intention modal records the intention and posts the prompt."""
-    session_id = _seed_session(registry, facilitator_id=111)
+    """Submitting the intention modal records the intention, posts the participant
+    prompt, connects voice, marks the session active, posts the timer message,
+    and schedules the countdown.
+    """
+    session_id = _seed_session_with_duration(
+        registry, facilitator_id=111, duration_minutes=25
+    )
 
     modal = IntentionModal(bot=bot, session_id=session_id)
 
@@ -203,9 +221,30 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     # Build a fake interaction for the modal submit.
     inter = AsyncMock()
     inter.response = AsyncMock()
-    inter.channel = AsyncMock()
+    # channel.send returns different messages on first (participant prompt) and
+    # second (active timer) call.
+    fake_timer_msg = AsyncMock()
+    inter.channel.send = AsyncMock(side_effect=["_participant_msg_", fake_timer_msg])
+    inter.followup = AsyncMock()
 
-    await modal.on_submit(inter)
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_voice_client = AsyncMock()
+
+    def _close_coro(coro: object) -> None:
+        # Close the coroutine so Python does not warn about it being unawaited.
+        if hasattr(coro, "close"):
+            coro.close()  # type: ignore[union-attr]
+
+    with (
+        patch("app.bot.voice.connect", return_value=fake_voice_client) as mock_connect,
+        patch.object(
+            bot.client, "fetch_channel", return_value=fake_voice_channel
+        ) as mock_fetch,
+        patch(
+            "app.bot.asyncio.create_task", side_effect=_close_coro
+        ) as mock_create_task,
+    ):
+        await modal.on_submit(inter)
 
     # Intention must be recorded in the registry and in SQLite.
     session = registry.get(session_id)
@@ -218,10 +257,80 @@ async def test_modal_submit_records_intention_and_posts_participant_prompt(
     )
     row = cur.fetchone()
     assert row[0] == "finish the changelog"
-    assert row[1] == "intention_set"
+    # State is now ACTIVE (mark_active was called inside on_submit).
+    assert row[1] == "active"
 
     # Modal interaction must be deferred (ephemeral ack, no channel noise).
     inter.response.defer.assert_called_once_with(ephemeral=True)
 
-    # Participant prompt posted to the channel with exact Spec text.
-    inter.channel.send.assert_called_once_with(_MSG_PARTICIPANT_PROMPT)
+    # Participant prompt posted first.
+    assert inter.channel.send.call_count == 2
+    first_call_args = inter.channel.send.call_args_list[0]
+    assert first_call_args.args == (_MSG_PARTICIPANT_PROMPT,)
+
+    # Voice channel fetched with the correct id.
+    mock_fetch.assert_called_once_with(444)  # voice_channel_id seeded above
+
+    # voice.connect called with the fetched channel.
+    mock_connect.assert_called_once_with(fake_voice_channel)
+
+    # Session advanced to ACTIVE.
+    assert session.state == SessionState.ACTIVE
+
+    # Active timer message posted second (after participant prompt).
+    second_call_args = inter.channel.send.call_args_list[1]
+    expected_initial = _ACTIVE_TIMER_FMT.format(
+        intention="finish the changelog", mm=25, ss=0
+    )
+    assert second_call_args.args == (expected_initial,)
+
+    # Countdown task scheduled.
+    mock_create_task.assert_called_once()
+
+    # Edit state stashed.
+    assert session_id in bot._edit_states
+    assert bot._edit_states[session_id].message is fake_timer_msg
+
+
+@pytest.mark.asyncio
+async def test_modal_submit_voice_connect_failure_cancels_session(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """When voice connect raises, the session is cancelled and an ephemeral error is sent."""
+    session_id = _seed_session_with_duration(
+        registry, facilitator_id=111, duration_minutes=10
+    )
+
+    modal = IntentionModal(bot=bot, session_id=session_id)
+    text_input = cast(
+        discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
+    )
+    text_input._value = "will be cancelled"
+
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+    inter.channel = AsyncMock()
+    inter.followup = AsyncMock()
+
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+
+    with (
+        patch.object(bot.client, "fetch_channel", return_value=fake_voice_channel),
+        patch("app.bot.voice.connect", side_effect=Exception("no voice")),
+        patch("app.bot.asyncio.create_task") as mock_create_task,
+    ):
+        await modal.on_submit(inter)
+
+    # Session must be CANCELLED.
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.state == SessionState.CANCELLED
+
+    # Ephemeral error message sent to the user.
+    inter.followup.send.assert_called_once_with(
+        _MSG_VOICE_CONNECT_FAILED, ephemeral=True
+    )
+
+    # No countdown task scheduled.
+    mock_create_task.assert_not_called()
