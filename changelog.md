@@ -32,6 +32,16 @@ session log.
   startup.
 - **SQLite session log** at `$TEAMODE_DB_PATH` (default `./sessions.db`).
 
+### Known issues
+
+- **PyNaCl CVE-2025-69277** is unresolved at V1. The fix requires
+  PyNaCl >= 1.6.2, but `discord.py[voice]==2.7.1` (the latest release
+  on PyPI as of 2026-05-11) pins `PyNaCl<1.6`. The CVE affects atypical
+  custom-cryptography paths and is low-risk for TeaMode's standard
+  voice-channel usage. Revisit when discord.py releases a version that
+  allows PyNaCl 1.6.x; bump `discord.py[voice]` and re-run `pip-audit`
+  to confirm clear.
+
 ### Not in V1
 
 - Chained sessions, embed-with-progress-bar timer, `/teamode-stats`,
