@@ -92,6 +92,16 @@ deferred:
   aspect ratio. Shown on the application's developer-portal page.
   Same style direction as the icon.
 
+### v1.x — code organization
+
+- **Rename `app/bot.py` → `app/discord_bot.py` (or similar).**
+  Becomes worth doing if a second bot integration ever lands (slack
+  webhook, web dashboard, etc). Today the project is Discord-only and
+  `bot.py` is unambiguous within `app/`. Cascade: `teamode.py` import,
+  three `tests/test_bot_*.py` patch points (`app.bot.X`), references
+  in `AGENTS.md`, `.apm/plan.md`, `.apm/spec.md`. Defer until a real
+  second integration creates the ambiguity.
+
 ---
 
 ## Notes
