@@ -32,5 +32,6 @@ title: TeaMode
 - Dispatch mode: foreground only (User has not configured permissions for background subagents).
 - Holistic verification points flagged by Planner: end of Stages 2, 3, 4, 5, 6 — assess at each Stage close.
 - Worker false-positive note: in Task Prompts, name the package as "`app/`" explicitly. The repo root directory is also named `teamode/` on disk (per AGENTS.md tree diagram), and a worker re-reading AGENTS.md may conflate the two.
-- T3.3 scope drift carry-over: the worker added `voice_client.disconnect()` after `mark_followup` (around `app/bot.py:182`). Per Spec § Voice, disconnect should happen *after* `play_reverie_then_disconnect` in T4.1, not before. T4.1 prompt must explicitly remove this premature disconnect and replace with the proper sequence.
+- T3.3 scope drift carry-over: the worker added `voice_client.disconnect()` after `mark_followup` (around `app/bot.py:182`). Per Spec § Voice, disconnect should happen *after* `play_reverie_then_disconnect` in T4.1, not before. T4.1 prompt must explicitly remove this premature disconnect and replace with the proper sequence. (Resolved by T4.2 initial implementation.)
+- Stage 5 T5.1 scope: User-approved expansion to include manual facilitator handoff command. Command name is **`/handoff @user`** (NOT `/lead @user` — User renamed before dispatch). T5.1 should still also implement the automatic RNG handoff on voice-state-update per the existing Spec. Capture both behaviours in the T5.1 prompt.
 

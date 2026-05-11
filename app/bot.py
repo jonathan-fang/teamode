@@ -51,7 +51,7 @@ _MSG_PARTICIPANT_PROMPT = "🥅 **[Set Intention]** Please share your intention 
 _MSG_VOICE_CONNECT_FAILED = "Could not join voice — session cancelled."
 
 # Active timer message format (two spaces between intention and timer per Spec).
-_ACTIVE_TIMER_FMT = "🍵 Facilitator's Intention: {intention}\n{duration} min session\n⏳ {mm:02d}:{ss:02d}"
+_ACTIVE_TIMER_FMT = "{intention_line}\n{duration} min session\n⏳ {mm:02d}:{ss:02d}"
 
 # Edit cadence per UI-ADR § "Timer edit cadence".
 _EDIT_INTERVAL_SECONDS = 10
@@ -60,11 +60,28 @@ _EDIT_INTERVAL_SECONDS = 10
 _BACKOFF_FLOOR_DEFAULT = 10.0
 _BACKOFF_FLOOR_CAP = 60.0
 
+# End-of-session embed — canonical from UI-ADR § "End-of-session embed copy".
+_END_EMBED_TITLE = "✨ Session complete!"
+_END_EMBED_BODY = "🌿 Sip your tea, stretch, and notice your progress."
+
+# Follow-up timeout per Spec § "Edge Cases" (3-minute watchdog).
+_FOLLOWUP_TIMEOUT_SECONDS = 180
+
 
 def _format_timer(seconds_remaining: int) -> str:
     """Format *seconds_remaining* as ``mm:ss`` (zero-padded)."""
     mm, ss = divmod(seconds_remaining, 60)
     return f"{mm:02d}:{ss:02d}"
+
+
+def _format_intention_line(intention: str | None) -> str:
+    """Render the first line of the active timer message.
+
+    Returns the placeholder when no intention was captured.
+    """
+    if intention and intention.strip():
+        return f"🍵 Facilitator's Intention: {intention}"
+    return "🍵 No intention set"
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +119,7 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         component=discord.ui.TextInput(
             style=discord.TextStyle.long,
             max_length=4000,
-            required=True,
+            required=False,
         ),
     )
 
@@ -136,10 +153,6 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         )
         # Acknowledge the modal interaction without cluttering the channel.
         await interaction.response.defer(ephemeral=True)
-        # Post the participant prompt publicly via the interaction webhook.
-        # Using followup.send (ephemeral=False) avoids requiring explicit
-        # View Channel + Send Messages permissions on the voice channel.
-        await interaction.followup.send(_MSG_PARTICIPANT_PROMPT, ephemeral=False)
 
         # --- Connect voice ---
         # Use the channel resolved at click-handler time — no REST round-trip.
@@ -156,7 +169,7 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         self._bot._registry.mark_active(session_id=self._session_id)
         assert session.duration_minutes is not None
         initial_content = _ACTIVE_TIMER_FMT.format(
-            intention=session.intention,
+            intention_line=_format_intention_line(session.intention),
             duration=session.duration_minutes,
             mm=session.duration_minutes,
             ss=0,
@@ -169,8 +182,12 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         # Stash edit state so the tick callback can reach it.
         self._bot._edit_states[self._session_id] = _EditState(message=timer_message)
 
-        # --- Schedule countdown, then mark followup when it completes ---
+        # --- Schedule countdown, then run the full end-of-session sequence ---
         session_id = self._session_id
+        # Capture the channel reference for the end-of-session messages.
+        # interaction.channel is a VoiceChannel here (enforced by the
+        # /teamode guard), which is Messageable. Cast to satisfy pyright.
+        channel = cast(discord.abc.Messageable | None, interaction.channel)
 
         async def _run_and_followup() -> None:
             await session_module.run_countdown(
@@ -178,9 +195,14 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
                 on_tick=lambda s: self._bot._on_countdown_tick(session_id, s),
             )
             self._bot._registry.mark_followup(session_id=session_id)
-            # Clean up edit state; Stage 4 will handle the end-of-session surface.
+            # Clean up edit state.
             self._bot._edit_states.pop(session_id, None)
-            await voice_client.disconnect()  # type: ignore[misc]
+            # Run the full end-of-session sequence.
+            await self._bot._run_end_of_session(
+                session_id=session_id,
+                voice_client=voice_client,
+                channel=channel,
+            )
 
         asyncio.create_task(_run_and_followup())
 
@@ -209,9 +231,19 @@ class TeaModeBot:
         # Populated when an active timer message is posted; removed on followup.
         self._edit_states: dict[int, _EditState] = {}
 
+        # Per-session watchdog tasks for the 3-minute follow-up timeout.
+        # Keyed by session_id; cancelled on facilitator reaction.
+        self._watchdog_tasks: dict[int, asyncio.Task[None]] = {}
+
+        # Per-session Reflect message ids; maps session_id → message.id.
+        # Used by on_raw_reaction_add to identify which session a reaction belongs to.
+        self._reflect_message_ids: dict[int, int] = {}
+
         intents = discord.Intents.default()
         intents.guilds = True
         intents.voice_states = True
+        # reactions intent: required to receive on_raw_reaction_add events.
+        intents.reactions = True
 
         self.client = discord.Client(intents=intents)
         self.tree = app_commands.CommandTree(self.client)
@@ -219,6 +251,7 @@ class TeaModeBot:
         # Wire event handlers.
         self.client.event(self.on_ready)
         self.client.event(self.on_interaction)
+        self.client.event(self.on_raw_reaction_add)
 
         # Register the slash command on this instance.
         self._register_command()
@@ -250,8 +283,8 @@ class TeaModeBot:
         """Route component interactions (button clicks, select menus, etc.).
 
         Dispatch structure: parse ``custom_id`` → route by purpose segment.
-        Adding a new purpose (e.g. ``followup``) requires only a new branch
-        in the ``if purpose == ...`` block below — the parse logic is shared.
+        Adding a new purpose requires only a new branch in the
+        ``if purpose == ...`` block below — the parse logic is shared.
 
         Application-command interactions are forwarded to the command tree
         instead of being handled here.
@@ -278,7 +311,6 @@ class TeaModeBot:
 
         if purpose == "timer":
             await self._handle_timer_pick(interaction, session_id, parts)
-        # Future purposes (followup, etc.) get their own branch here.
 
     async def _handle_timer_pick(
         self,
@@ -315,6 +347,17 @@ class TeaModeBot:
             session_id=session_id,
             duration_minutes=duration_minutes,
         )
+
+        # Disable the timer-pick buttons so a second click is impossible.
+        # Must be done before opening the modal (responding to the interaction
+        # with a modal consumes the response slot).
+        assert interaction.message is not None
+        view = discord.ui.View.from_message(interaction.message)
+        for child in view.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.message.edit(view=view)
+
         # interaction.channel is guaranteed to be a VoiceChannel here — the
         # /teamode invocation guard (Guard 1 in _handle_teamode) already
         # enforced it.  The assert satisfies pyright's narrowing requirement.
@@ -325,6 +368,175 @@ class TeaModeBot:
             voice_channel=interaction.channel,
         )
         await interaction.response.send_modal(modal)
+
+    async def _run_end_of_session(
+        self,
+        *,
+        session_id: int,
+        voice_client: discord.VoiceClient,
+        channel: discord.abc.Messageable | None,
+    ) -> None:
+        """Run the full end-of-session sequence after countdown reaches zero.
+
+        Order: Session-complete embed (@-mention) → reverie+disconnect
+        → Reflect embed (facilitator prompt) → pre-populate reactions
+        → 3-minute watchdog.
+        """
+        if channel is None:
+            logger.warning(
+                "No channel reference for session %s end-of-session sequence",
+                session_id,
+            )
+            return
+
+        # Step a: Snapshot voice channel members (excluding the bot).
+        voice_channel = voice_client.channel
+        if isinstance(voice_channel, discord.VoiceChannel):
+            members = [
+                m
+                for m in voice_channel.members
+                if not m.bot
+                and m.id != (self.client.user.id if self.client.user else None)
+            ]
+        else:
+            members = []
+
+        if members:
+            mentions = " ".join(m.mention for m in members)
+            mention_content = f"Time's up, {mentions}!"
+        else:
+            mention_content = "Time's up!"
+
+        # Step b: Post Session-complete embed with the @-mention content.
+        session_complete_embed = discord.Embed(
+            title=_END_EMBED_TITLE,
+            description=f"### {_END_EMBED_BODY}",
+            color=COLORS["end_of_session"],
+        )
+        await channel.send(content=mention_content, embed=session_complete_embed)
+
+        # Step c: Reverie playback + disconnect.
+        playback_ok = await voice.play_reverie_then_disconnect(voice_client)
+        if not playback_ok:
+            logger.warning("Reverie playback failed for session %s", session_id)
+
+        # Step d: Post Reflect message with facilitator prompt.
+        facilitator_prompt = "[Follow-up] React with ✅ if you finished, or ⛔ if not."
+        reflect_embed = discord.Embed(
+            title="🌿 [Reflect]",
+            description=(
+                "### Share how your session went!\n"
+                "### · React with emoji\n"
+                "### · Share in voice\n"
+                "### · Or type in chat"
+            ),
+            color=COLORS["end_of_session"],
+        )
+        reflect_msg = await channel.send(
+            content=facilitator_prompt, embed=reflect_embed
+        )
+
+        # Step e: Pre-populate reactions on the Reflect message.
+        await reflect_msg.add_reaction("✅")
+        await reflect_msg.add_reaction("⛔")
+
+        # Step f: Store the Reflect message id for the reaction listener.
+        self._reflect_message_ids[session_id] = reflect_msg.id
+
+        # Step g: 3-minute watchdog.
+        async def _watchdog() -> None:
+            try:
+                await asyncio.sleep(_FOLLOWUP_TIMEOUT_SECONDS)
+            except asyncio.CancelledError:
+                return
+            # Watchdog fired — mark timeout and clean up.
+            try:
+                self._registry.mark_followup_timeout(session_id=session_id)
+            except Exception:
+                logger.exception(
+                    "mark_followup_timeout failed for session %s", session_id
+                )
+            self._reflect_message_ids.pop(session_id, None)
+            logger.info(
+                "Follow-up watchdog fired for session %s — marked followup_timeout",
+                session_id,
+            )
+
+        task: asyncio.Task[None] = asyncio.create_task(_watchdog())
+        self._watchdog_tasks[session_id] = task
+
+    async def on_raw_reaction_add(
+        self, payload: discord.RawReactionActionEvent
+    ) -> None:
+        """Facilitator-authoritative reaction handler for the Reflect message.
+
+        The facilitator's ✅ or ⛔ reaction on the Reflect embed sets
+        ``completed_intention`` and terminates the watchdog. Non-facilitator
+        reactions and the bot's own pre-populated reactions are ignored.
+        """
+        # Ignore the bot's own pre-populated reactions.
+        if self.client.user is not None and payload.user_id == self.client.user.id:
+            return
+
+        # Find the session whose Reflect message matches this payload.
+        session_id: int | None = None
+        for sid, msg_id in self._reflect_message_ids.items():
+            if msg_id == payload.message_id:
+                session_id = sid
+                break
+        if session_id is None:
+            return
+
+        # Look up the session; it must be in followup state.
+        session = self._registry.get(session_id)
+        if session is None:
+            return
+        from app.session import SessionState
+
+        if session.state != SessionState.FOLLOWUP:
+            return
+
+        emoji_str = str(payload.emoji)
+        if emoji_str not in ("✅", "⛔"):
+            return
+
+        # Non-facilitator reaction: log only.
+        if payload.user_id != int(session.facilitator_id):
+            logger.info(
+                "Non-facilitator reaction %s by user %s on session %s — logged only",
+                emoji_str,
+                payload.user_id,
+                session_id,
+            )
+            return
+
+        # Facilitator reaction — authoritative answer.
+        task = self._watchdog_tasks.pop(session_id, None)
+        if task is not None:
+            task.cancel()
+
+        # Pop the Reflect-message id to prevent duplicate handling.
+        self._reflect_message_ids.pop(session_id, None)
+
+        if emoji_str == "✅":
+            self._registry.mark_completed(
+                session_id=session_id,
+                completed_intention=1,
+                followup_note=None,
+            )
+        else:
+            # ⛔ — record incomplete, then post the "why" prompt.
+            self._registry.mark_completed(
+                session_id=session_id,
+                completed_intention=0,
+                followup_note=None,
+            )
+            channel = self.client.get_channel(int(session.text_channel_id))
+            if channel is not None:
+                await cast(discord.abc.Messageable, channel).send(
+                    f"<@{session.facilitator_id}> — share what got in the way: "
+                    "type in chat or share in voice."
+                )
 
     async def _on_countdown_tick(self, session_id: int, seconds_remaining: int) -> None:
         """Tick callback injected into ``run_countdown``.
@@ -345,9 +557,9 @@ class TeaModeBot:
             # Session was cleaned up; nothing to do.
             return
 
-        # Check the session intention for the message content.
+        # Check the session for the message content.
         session = self._registry.get(session_id)
-        if session is None or session.intention is None:
+        if session is None:
             return
 
         # Skip if a previous edit is still in flight.
@@ -362,7 +574,7 @@ class TeaModeBot:
         async with edit_state.lock:
             mm, ss = divmod(seconds_remaining, 60)
             content = _ACTIVE_TIMER_FMT.format(
-                intention=session.intention,
+                intention_line=_format_intention_line(session.intention),
                 duration=session.duration_minutes,
                 mm=mm,
                 ss=ss,
@@ -482,6 +694,25 @@ class TeaModeBot:
 
         await interaction.response.send_message(embed=embed, view=view)
 
+        # Post the participant prompt 1 second after the welcome embed.
+        await asyncio.sleep(1.0)
+
+        # Snapshot voice members, filter the bot itself.
+        assert voice_state.channel is not None
+        bot_id = self.client.user.id if self.client.user else None
+        members = [
+            m for m in voice_state.channel.members if not m.bot and m.id != bot_id
+        ]
+        if members:
+            mentions = " ".join(m.mention for m in members)
+            participant_prompt = (
+                f"🥅 **[Set Intention]** {mentions} Please share your intention "
+                "for this session in voice or type it in the chat."
+            )
+        else:
+            participant_prompt = _MSG_PARTICIPANT_PROMPT
+        await interaction.followup.send(participant_prompt, ephemeral=False)
+
     def run(self, token: str) -> None:
         """Start the Discord event loop."""
         self.client.run(token)
@@ -501,11 +732,11 @@ def _build_welcome_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🍵 Now Entering TeaMode",
         description=(
-            "Time for TeaMode!\n"
-            "· Grab your tea (or water/beverage of your choice),\n"
-            "· Clear your desk,\n"
-            "· And silence all distractions (like phones, impromptu meetings).\n\n"
-            "⏳ **How long would you like to focus today?**"
+            "### Time for TeaMode!\n"
+            "### · Grab your tea (or water/beverage of your choice),\n"
+            "### · Clear your desk,\n"
+            "### · And silence all distractions (like phones, impromptu meetings).\n\n"
+            "### ⏳ **How long would you like to focus today?**"
         ),
         color=COLORS["active"],
     )
@@ -519,7 +750,7 @@ def _build_timer_view(session_id: int) -> discord.ui.View:
     ``teamode:<session_id>:timer:<value>``.
     """
     view = discord.ui.View()
-    for minutes in (10, 25, 50):
+    for minutes in (5, 10, 25, 50):
         button: discord.ui.Button[discord.ui.View] = discord.ui.Button(
             label=f"{minutes} min",
             custom_id=f"teamode:{session_id}:timer:{minutes}",
