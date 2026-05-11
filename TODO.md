@@ -102,6 +102,49 @@ deferred:
   in `AGENTS.md`, `.apm/plan.md`, `.apm/spec.md`. Defer until a real
   second integration creates the ambiguity.
 
+### v1.x — intention modal flexibility
+
+- **Allow empty modal submission.** Spec § `intention` already says
+  "Empty string allowed (intention is optional in the flow)" but
+  T3.2's worker shipped `required=True`. Flip to `required=False` and
+  handle the empty case in `_ACTIVE_TIMER_FMT` — proposed fallback
+  display: `🍵 Facilitator's Intention: (none)\n<duration> min session\n⏳ MM:SS`,
+  or `🍵 Focus session\n<duration> min session\n⏳ MM:SS`. Pick one
+  before merging. Some facilitators prefer to speak their intention
+  rather than type it.
+
+### v1.x — countdown wrap-up message
+
+- **Three-minute wrap-up nudge.** When the countdown reaches 180 s
+  remaining, post a one-time channel message: `⏳ Three minutes left
+  — start to wrap up your task. We're nearing the end of the session.`
+  Edge cases: don't fire if `mark_cancelled` happened first; sessions
+  shorter than 3 min (none in the 10/25/50 set, but worth a guard).
+  Could fold into V2 timer "phase label" instead — see below.
+
+### v2 — embed timer with progress and phase labels
+
+Inspired by `dlqa`'s `FocusTimerWidget` (`~/WSL/.../dlqa/app/ui/widgets.py:173`).
+Replace the plain-text active timer with a `discord.Embed` that
+renders four stacked sections per tick:
+
+1. **Title** — `🍵 TeaMode • <duration> min session`.
+2. **Embed fields** — `Intention`, `Facilitator`, `Started at`
+   (Discord renders these in a dedicated card layout, less squashed
+   than a one-liner edit).
+3. **Phase label** — a contextual line that the bot swaps based on
+   time remaining: `Deep focus` for the bulk of the session,
+   `Wrap up — finish your current task` for the last 3 minutes.
+   Unifies the v1.x wrap-up nudge above with the timer visual itself
+   (no separate channel message needed).
+4. **Countdown + progress** — `MM:SS remaining` plus an ASCII
+   progress bar (`█████░░░░░ 50%`). The "remaining" suffix is a
+   small UX win for clarity.
+
+Accent color: matcha sage `#7B9D6F` (active), shifts to a different
+hue (e.g. oolong amber) for the wrap-up phase. Mobile rendering wins
+because embeds get a dedicated card.
+
 ---
 
 ## Notes
