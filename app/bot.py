@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
+from dataclasses import dataclass, field
 from typing import cast
 
 import discord
 from discord import app_commands
 
+from app import voice
 from app.config import TEAMODE_DEV_GUILD_ID
+from app import session as session_module
 from app.session import SessionRegistry
 
 logger = logging.getLogger(__name__)
@@ -45,6 +49,43 @@ _MSG_PARTICIPANT_PROMPT = (
     "Everyone — type your intention in chat or share it in voice. Take a minute."
 )
 
+# Voice connect failure — ephemeral, short, clear.
+_MSG_VOICE_CONNECT_FAILED = "Could not join voice — session cancelled."
+
+# Active timer message format (two spaces between intention and timer per Spec).
+_ACTIVE_TIMER_FMT = "🍵 Intention: {intention}  ⏳ {mm:02d}:{ss:02d}"
+
+# Edit cadence per UI-ADR § "Timer edit cadence".
+_EDIT_INTERVAL_SECONDS = 10
+
+# Backoff limits for 429 handling.
+_BACKOFF_FLOOR_DEFAULT = 10.0
+_BACKOFF_FLOOR_CAP = 60.0
+
+
+def _format_timer(seconds_remaining: int) -> str:
+    """Format *seconds_remaining* as ``mm:ss`` (zero-padded)."""
+    mm, ss = divmod(seconds_remaining, 60)
+    return f"{mm:02d}:{ss:02d}"
+
+
+# ---------------------------------------------------------------------------
+# Per-session edit-state holder
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _EditState:
+    """Mutable edit state for one active timer session.
+
+    Holds the message handle to edit, a lock to prevent concurrent edits,
+    and the current rate-limit backoff floor.
+    """
+
+    message: discord.Message
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    backoff_floor: float = _BACKOFF_FLOOR_DEFAULT
+
 
 # ---------------------------------------------------------------------------
 # IntentionModal
@@ -77,7 +118,7 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
             discord.ui.TextInput[discord.ui.Modal], self.intention_field.component
         )
         intention_text = text_input.value or ""
-        self._bot._registry.set_intention(
+        session = self._bot._registry.set_intention(
             session_id=self._session_id,
             intention=intention_text,
         )
@@ -85,6 +126,50 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         await interaction.response.defer(ephemeral=True)
         # Post the participant prompt publicly in the session's text channel.
         await interaction.channel.send(_MSG_PARTICIPANT_PROMPT)  # type: ignore[union-attr]
+
+        # --- Connect voice ---
+        try:
+            voice_channel = await self._bot.client.fetch_channel(
+                int(session.voice_channel_id)
+            )
+            if not isinstance(voice_channel, discord.VoiceChannel):
+                raise TypeError(
+                    f"Expected VoiceChannel, got {type(voice_channel).__name__}"
+                )
+            voice_client = await voice.connect(voice_channel)
+        except Exception:
+            logger.exception("Voice connect failed for session %s", self._session_id)
+            await interaction.followup.send(_MSG_VOICE_CONNECT_FAILED, ephemeral=True)
+            self._bot._registry.mark_cancelled(session_id=self._session_id)
+            return
+
+        # --- Advance to ACTIVE and post the timer message ---
+        self._bot._registry.mark_active(session_id=self._session_id)
+        assert session.duration_minutes is not None
+        initial_content = _ACTIVE_TIMER_FMT.format(
+            intention=session.intention,
+            mm=session.duration_minutes,
+            ss=0,
+        )
+        timer_message = await interaction.channel.send(initial_content)  # type: ignore[union-attr]
+
+        # Stash edit state so the tick callback can reach it.
+        self._bot._edit_states[self._session_id] = _EditState(message=timer_message)
+
+        # --- Schedule countdown, then mark followup when it completes ---
+        session_id = self._session_id
+
+        async def _run_and_followup() -> None:
+            await session_module.run_countdown(
+                duration_minutes=session.duration_minutes,  # type: ignore[arg-type]
+                on_tick=lambda s: self._bot._on_countdown_tick(session_id, s),
+            )
+            self._bot._registry.mark_followup(session_id=session_id)
+            # Clean up edit state; Stage 4 will handle the end-of-session surface.
+            self._bot._edit_states.pop(session_id, None)
+            await voice_client.disconnect()  # type: ignore[misc]
+
+        asyncio.create_task(_run_and_followup())
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +191,10 @@ class TeaModeBot:
     ) -> None:
         self._conn = conn
         self._registry = registry
+
+        # Per-session edit state, keyed by session_id.
+        # Populated when an active timer message is posted; removed on followup.
+        self._edit_states: dict[int, _EditState] = {}
 
         intents = discord.Intents.default()
         intents.guilds = True
@@ -215,6 +304,68 @@ class TeaModeBot:
         )
         modal = IntentionModal(bot=self, session_id=session_id)
         await interaction.response.send_modal(modal)
+
+    async def _on_countdown_tick(self, session_id: int, seconds_remaining: int) -> None:
+        """Tick callback injected into ``run_countdown``.
+
+        Fires every second.  Only attempts a Discord message edit on
+        ticks that are multiples of *_EDIT_INTERVAL_SECONDS* or on the
+        final tick (``seconds_remaining == 0``).
+
+        Skips the edit if the per-session lock is already held (a previous
+        edit is still in flight).  Applies exponential backoff on HTTP 429.
+        """
+        # Only edit on 10-second boundaries and at zero.
+        if seconds_remaining % _EDIT_INTERVAL_SECONDS != 0 and seconds_remaining != 0:
+            return
+
+        edit_state = self._edit_states.get(session_id)
+        if edit_state is None:
+            # Session was cleaned up; nothing to do.
+            return
+
+        # Check the session intention for the message content.
+        session = self._registry.get(session_id)
+        if session is None or session.intention is None:
+            return
+
+        # Skip if a previous edit is still in flight.
+        if edit_state.lock.locked():
+            logger.debug(
+                "Skipping edit for session %s at %ds — previous edit in flight",
+                session_id,
+                seconds_remaining,
+            )
+            return
+
+        async with edit_state.lock:
+            mm, ss = divmod(seconds_remaining, 60)
+            content = _ACTIVE_TIMER_FMT.format(
+                intention=session.intention,
+                mm=mm,
+                ss=ss,
+            )
+            try:
+                await edit_state.message.edit(content=content)
+                # Successful edit — decay backoff floor back to default.
+                edit_state.backoff_floor = _BACKOFF_FLOOR_DEFAULT
+            except discord.HTTPException as exc:
+                if exc.status == 429:
+                    # Rate limited — double the floor, respect the cap.
+                    edit_state.backoff_floor = min(
+                        edit_state.backoff_floor * 2, _BACKOFF_FLOOR_CAP
+                    )
+                    logger.warning(
+                        "Rate limited on session %s timer edit; backoff floor now %.0fs",
+                        session_id,
+                        edit_state.backoff_floor,
+                    )
+                else:
+                    logger.warning(
+                        "HTTP %s editing timer message for session %s",
+                        exc.status,
+                        session_id,
+                    )
 
     # ------------------------------------------------------------------
     # Command registration
