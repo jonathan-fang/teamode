@@ -1,6 +1,6 @@
 ---
 title: TeaMode
-modified: Spec creation by the Planner. Manager renamed package teamode/ → app/ before Stage 1 dispatch.
+modified: Spec creation by the Planner. Manager renamed package teamode/ → app/ before Stage 1 dispatch. User refreshed first participant prompt copy during Stage 3 smoke test.
 ---
 
 # APM Spec
@@ -227,7 +227,7 @@ during the session:
 
 | When | Prompt |
 |---|---|
-| Right after the facilitator submits their intention modal, before the timer starts | "Everyone — type your intention in chat or share it in voice. Take a minute." |
+| Right after the facilitator submits their intention modal, before the timer starts | "🥅 **[Set Intention]** Please share your intention for this session in voice or type it in the chat." |
 | Right after the end-of-session embed, before the facilitator's Y/N follow-up | "Everyone — share how the session went, in chat or voice." |
 
 The prompts are **plain text messages** in the channel — not embeds,
@@ -278,8 +278,14 @@ Authoritative source: `.project-meta/UI-ADR.md`.
 
 ### Visual fidelity tier (MVP)
 
-- Active timer surface: **plain text edit** cycling
-  `🍵 Intention: <…>  ⏳ <mm>:<ss>` every 10 seconds.
+- Active timer surface: **plain text edit** cycling a three-line
+  format every 10 seconds:
+
+  ```
+  🍵 Facilitator's Intention: <…>
+  <duration> min session
+  ⏳ <mm>:<ss>
+  ```
 - End-of-session: an embed (steeping forest accent) with the 🍵🌿✨
   flourish, plus a follow-up button row.
 - Welcome: a single tidy embed (matcha sage accent) with the timer-pick

@@ -183,6 +183,47 @@ handoff occurred.
 
 ---
 
+## Viewing the database
+
+The DB lives at `$TEAMODE_DB_PATH` (default `./sessions.db` at the
+repo root). Gitignored.
+
+### `sqlite3` CLI (always available, works while the bot is running)
+
+```bash
+# One-shot read of the most recent sessions.
+sqlite3 sessions.db "SELECT id, status, intention, started_at, ended_at FROM sessions ORDER BY id DESC LIMIT 5;"
+
+# Interactive shell.
+sqlite3 sessions.db
+sqlite> .tables
+sqlite> .schema sessions
+sqlite> SELECT * FROM sessions ORDER BY id DESC LIMIT 5;
+sqlite> .quit
+
+# Read-only mode (avoids any lock contention with the running bot).
+sqlite3 -readonly sessions.db
+```
+
+### GUI options
+
+- **DB Browser for SQLite** — free, cross-platform, opens the file
+  directly. **Stop the bot first** — DB Browser opens read-write by
+  default and the running bot's connection holds a lock that blocks
+  it.
+- **DBeaver** — heavier, supports many DBs.
+- **VS Code extension** `alexcvzz.vscode-sqlite` — right-click
+  `sessions.db` in the file tree → Open Database.
+
+### Why the bot locks the file
+
+SQLite uses an exclusive lock during write transactions, and the
+running bot keeps a connection open across the session lifecycle.
+Stop the bot (`Ctrl+C`) before opening in DB Browser, or use the
+`sqlite3 -readonly` flag to read concurrently.
+
+---
+
 ## Source links
 
 - `https://docs.discord.com/developers/reference` — snowflake format.

@@ -70,7 +70,7 @@ Do not introduce new emoji without updating this section.
 Source of truth for the welcome embed. The bot's runtime output must
 match this verbatim — do not paraphrase in code.
 
-- **Title:** `🍵 TeaMode`
+- **Title:** `🍵 Now Entering TeaMode`
 - **Body:**
 
 > Time for TeaMode!

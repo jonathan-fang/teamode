@@ -1,7 +1,10 @@
 """Session state machine and in-memory registry for TeaMode."""
 
+import asyncio
 import enum
 import sqlite3
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import app.db as db
@@ -318,3 +321,62 @@ class SessionRegistry:
         db.update_cancelled(self._conn, session_id=session_id, ended_at=ended_at)
         session.state = SessionState.CANCELLED
         self._remove_from_channel_index(session)
+
+
+# ---------------------------------------------------------------------------
+# Countdown coroutine — pure logic, no Discord imports
+# ---------------------------------------------------------------------------
+
+
+async def run_countdown(
+    *,
+    duration_minutes: int,
+    on_tick: Callable[[int], Awaitable[None]],
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    """Drive a countdown from *duration_minutes* to zero, calling *on_tick* every second.
+
+    The tick callback receives the number of seconds remaining (starting at
+    ``duration_minutes * 60`` and counting down to ``0`` inclusive).
+
+    Drift correction: each sleep target is computed from a fixed origin
+    (``start``) rather than accumulated ``await sleep(1)`` calls.  Under load,
+    individual ticks may fire slightly late, but the next sleep compensates so
+    the total elapsed time stays close to ``duration_minutes * 60`` seconds.
+
+    The coroutine is intentionally Discord-free.  Callers are responsible for
+    advancing session state (``mark_followup``) after this coroutine returns.
+
+    Parameters
+    ----------
+    duration_minutes:
+        Session length to count down.
+    on_tick:
+        Async callback called with the remaining seconds at each 1-second tick.
+        Called with ``seconds_remaining = total_seconds`` on the first tick
+        and with ``0`` on the final tick.
+    sleep:
+        Injectable sleep function (default: ``asyncio.sleep``). Tests inject a
+        fake that advances a virtual clock without real waiting.
+    monotonic:
+        Injectable monotonic clock (default: ``time.monotonic``). Tests inject
+        a fake that is driven by the fake sleep.
+    """
+    total_seconds = duration_minutes * 60
+    start = monotonic()
+
+    for tick_number in range(total_seconds + 1):
+        seconds_remaining = total_seconds - tick_number
+        await on_tick(seconds_remaining)
+
+        if seconds_remaining == 0:
+            # Final tick delivered — done.
+            break
+
+        # Sleep until the next whole-second boundary relative to start.
+        next_target = start + (tick_number + 1)
+        elapsed = monotonic()
+        delay = next_target - elapsed
+        if delay > 0:
+            await sleep(delay)

@@ -84,6 +84,23 @@ In Discord (with Developer Mode on under User Settings → Advanced):
 If `TEAMODE_DEV_GUILD_ID` is unset the bot starts but skips command
 registration with a warning — by design.
 
+### Private voice channels
+
+Discord evaluates permissions in order: role grants → channel
+overrides → category overrides, with denies winning. In a public
+channel, `@everyone` has View Channel by default, so a role with
+View Channel granted just works. In a **private** voice channel,
+`@everyone` is denied View Channel by default, and role-level grants
+do **not** propagate. You must explicitly add the `TeaMode` role (or
+the Ocha bot user directly) to the channel's allow-list — at the
+voice channel's settings → Permissions → Add role/member → grant
+View Channel, Connect, Speak, Send Messages, Embed Links, Add
+Reactions, Use Application Commands. (The application-level perms
+integer from § 3 covers the role grant; the channel override grants
+the role access to *this specific channel*.) The bot itself cannot
+detect or work around this — it just gets `403 Forbidden` from the
+Discord API.
+
 ## 6. Local `.env`
 
 Sample `.env` at the repo root (gitignored):
