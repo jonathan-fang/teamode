@@ -104,6 +104,20 @@ class SessionRegistry:
             return None
         return session
 
+    def find_active_in_voice_channel(self, voice_channel_id: str) -> Session | None:
+        """Return the in-progress session whose voice channel matches, or None.
+
+        "In-progress" means state INTENTION_SET or ACTIVE. PENDING is before
+        voice join; FOLLOWUP and terminal states are after the session ended.
+        """
+        for session in self._by_id.values():
+            if session.voice_channel_id == voice_channel_id and session.state in (
+                SessionState.INTENTION_SET,
+                SessionState.ACTIVE,
+            ):
+                return session
+        return None
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
