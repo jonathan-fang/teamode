@@ -572,7 +572,8 @@ errors — log the cause; never swallow.
 - Update `README.md` — setup, features, status match current code.
 - Audit docs — verify accuracy.
 - Add tests for features added this cycle.
-- Scan for dead code; remove.
+- Scan for dead code with `vulture`; remove findings (or whitelist
+  with justification — `vulture --make-whitelist` produces a stub).
 - Run `pip-audit -r requirements.txt`; fix all high/critical findings.
 
 **Branch hygiene:** Verify the working tree is clean. Delete merged
