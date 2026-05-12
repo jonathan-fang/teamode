@@ -124,11 +124,11 @@ deferred:
 
 ### v1.x — countdown wrap-up message
 
-- **Three-minute wrap-up nudge.** When the countdown reaches 180 s
-  remaining, post a one-time channel message: `⏳ Three minutes left
+- **Five-minute wrap-up nudge.** When the countdown reaches 300 s
+  remaining, post a one-time channel message: `⏳ Five minutes left
   — start to wrap up your task. We're nearing the end of the session.`
   Edge cases: don't fire if `mark_cancelled` happened first; sessions
-  shorter than 3 min (none in the 10/25/50 set, but worth a guard).
+  shorter than 5 min (none in the 10/25/50 set, but worth a guard).
   Could fold into V2 timer "phase label" instead — see below.
 
 ### v2 — embed timer with progress and phase labels
