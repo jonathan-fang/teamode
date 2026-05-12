@@ -233,10 +233,8 @@ async def test_modal_submit_records_intention_and_posts_timer(
     # Build a fake interaction for the modal submit.
     inter = AsyncMock()
     inter.response = AsyncMock()
-    # followup.send returns the fake timer message (wait=True).
     fake_timer_msg = AsyncMock()
-    inter.followup = AsyncMock()
-    inter.followup.send = AsyncMock(return_value=fake_timer_msg)
+    inter.channel.send = AsyncMock(return_value=fake_timer_msg)
 
     fake_voice_client = AsyncMock()
 
@@ -270,9 +268,9 @@ async def test_modal_submit_records_intention_and_posts_timer(
     # Modal interaction must be deferred (ephemeral ack, no channel noise).
     inter.response.defer.assert_called_once_with(ephemeral=True)
 
-    # Only one followup.send: the active timer message (no participant prompt here).
-    assert inter.followup.send.call_count == 1
-    timer_call = inter.followup.send.call_args_list[0]
+    # Timer message sent via channel.send (not followup — avoids 15-min token expiry).
+    assert inter.channel.send.call_count == 1
+    timer_call = inter.channel.send.call_args_list[0]
     expected_initial = _ACTIVE_TIMER_FMT.format(
         intention_line=_format_intention_line("finish the changelog"),
         duration=25,
@@ -280,8 +278,6 @@ async def test_modal_submit_records_intention_and_posts_timer(
         ss=0,
     )
     assert timer_call.args == (expected_initial,)
-    assert timer_call.kwargs.get("ephemeral") is False
-    assert timer_call.kwargs.get("wait") is True
 
     # voice.connect called with the channel passed at modal-construction time
     # (no REST fetch_channel call occurs).

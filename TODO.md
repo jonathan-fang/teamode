@@ -13,6 +13,12 @@ Breakdown is complete — not here.
 
 _Empty — no patches scoped yet (V1 has not shipped)._
 
+~~why does it die on 35:10 on timer with edited-messages-bug.png?~~
+Fixed in `app/bot.py` `IntentionModal.on_submit`: swapped `interaction.followup.send(wait=True)`
+(returns a `WebhookMessage` whose edit token expires after 15 min) for
+`cast(discord.VoiceChannel, interaction.channel).send()` (regular `Message`, no expiry).
+Needs smoke test: run a 5-min session, confirm no `HTTP 40x editing timer message` warnings.
+
 ---
 
 ## Next Minor

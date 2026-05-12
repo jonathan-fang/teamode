@@ -181,9 +181,8 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
             mm=session.duration_minutes,
             ss=0,
         )
-        # wait=True ensures we get the real WebhookMessage back (with .edit/.id).
-        timer_message = await interaction.followup.send(
-            initial_content, ephemeral=False, wait=True
+        timer_message = await cast(discord.VoiceChannel, interaction.channel).send(
+            initial_content
         )
 
         # Stash edit state so the tick callback can reach it.
