@@ -39,7 +39,8 @@ _Empty._
 Valid ideas blocked on an external trigger or deferred until after V1
 ships. Promote to a release-target queue when ready.
 
-- make it easier to launch from desktop the teamode thing with source teamode secrets and venv.
+~~make it easier to launch from desktop the teamode thing with source teamode secrets and venv.~~
+Added `scripts/teamode_launcher.sh` (sources `~/.teamode-secrets`, activates venv, supports `dev`/`stable` modes) and `docs/windows-shortcut.md` with the wt.exe shortcut target.
 
 ### v2 — sharing and reach
 
