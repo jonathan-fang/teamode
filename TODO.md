@@ -13,7 +13,15 @@ Breakdown is complete — not here.
 
 ## Next Patch
 
-_Empty — no patches scoped yet (V1 has not shipped)._
+- **PID file lock — prevent dual-instance interaction failures.** When two bot
+  instances run against the same token simultaneously, Discord delivers each
+  interaction event to both. One instance acknowledges first; the other crashes
+  with `40060 Interaction already acknowledged` or `404 Unknown interaction`,
+  and users see "This session is no longer active." Fix: on startup in
+  `teamode.py`, write a PID file (e.g. `/tmp/teamode.pid`); if it already
+  exists and that PID is alive, log an error and exit cleanly; if the PID is
+  stale (process dead), overwrite and continue. Remove the file via `atexit` on
+  clean shutdown. No new dependencies.
 
 ~~why does it die on 35:10 on timer with edited-messages-bug.png?~~
 Fixed in `app/bot.py` `IntentionModal.on_submit`: swapped `interaction.followup.send(wait=True)`
