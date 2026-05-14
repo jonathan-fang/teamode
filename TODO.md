@@ -7,6 +7,8 @@ This file is the inbox + holding pen for ideas that aren't in flight.
 The active project work is tracked in `.apm/plan.md` once Work
 Breakdown is complete — not here.
 
+- run it by megan if they're interested in me testing out my discord bot? plan for hosting would be a free aws thing or something, and atm i can run it from my pc to test it out and see if people like it? i've been using it for a month, so say like early june or something, been using it for 2-3 weeks now. from May 10, 2026
+
 ---
 
 ## Next Patch
