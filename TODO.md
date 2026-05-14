@@ -46,6 +46,7 @@ Added `scripts/teamode_launcher.sh` (sources `~/.teamode-secrets`, activates ven
 - after teamode completes or is incomplete, delete the [now entering teamode] and [set intention] message to avoid cluttering the discord text chat. 
 add the same mentions as the set intention block to the timer message after the facilitator's intention.
 - remove the time's up message 3 minutes after the session is completed.
+- can teamode set the channel status to indicate when regroup is?
 
 ### v2 — sharing and reach
 
