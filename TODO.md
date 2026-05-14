@@ -41,6 +41,9 @@ ships. Promote to a release-target queue when ready.
 
 ~~make it easier to launch from desktop the teamode thing with source teamode secrets and venv.~~
 Added `scripts/teamode_launcher.sh` (sources `~/.teamode-secrets`, activates venv, supports `dev`/`stable` modes) and `docs/windows-shortcut.md` with the wt.exe shortcut target.
+- after teamode completes or is incomplete, delete the [now entering teamode] and [set intention] message to avoid cluttering the discord text chat. 
+add the same mentions as the set intention block to the timer message after the facilitator's intention.
+- remove the time's up message 3 minutes after the session is completed.
 
 ### v2 — sharing and reach
 
