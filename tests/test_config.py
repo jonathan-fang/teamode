@@ -49,21 +49,31 @@ def test_empty_token_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         _reload_config()
 
 
-def test_dev_guild_id_default_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    """TEAMODE_DEV_GUILD_ID is None when the env var is unset."""
+def test_dev_guild_ids_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TEAMODE_DEV_GUILD_IDS is empty when the env var is unset."""
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token-abcd")
     monkeypatch.delenv("TEAMODE_DEV_GUILD_ID", raising=False)
 
     cfg = _reload_config()
 
-    assert cfg.TEAMODE_DEV_GUILD_ID is None  # type: ignore[attr-defined]
+    assert cfg.TEAMODE_DEV_GUILD_IDS == []  # type: ignore[attr-defined]
 
 
-def test_dev_guild_id_populated_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    """TEAMODE_DEV_GUILD_ID picks up the env var value when set."""
+def test_dev_guild_ids_single(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TEAMODE_DEV_GUILD_IDS parses a single guild ID as a one-element list."""
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token-abcd")
     monkeypatch.setenv("TEAMODE_DEV_GUILD_ID", "123456789012345678")
 
     cfg = _reload_config()
 
-    assert cfg.TEAMODE_DEV_GUILD_ID == "123456789012345678"  # type: ignore[attr-defined]
+    assert cfg.TEAMODE_DEV_GUILD_IDS == [123456789012345678]  # type: ignore[attr-defined]
+
+
+def test_dev_guild_ids_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TEAMODE_DEV_GUILD_IDS parses comma-separated values into a list of ints."""
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token-abcd")
+    monkeypatch.setenv("TEAMODE_DEV_GUILD_ID", "111111111111111111,222222222222222222")
+
+    cfg = _reload_config()
+
+    assert cfg.TEAMODE_DEV_GUILD_IDS == [111111111111111111, 222222222222222222]  # type: ignore[attr-defined]

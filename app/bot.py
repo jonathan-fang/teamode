@@ -13,7 +13,7 @@ import discord
 from discord import app_commands
 
 from app import voice
-from app.config import TEAMODE_DEV_GUILD_ID
+from app.config import TEAMODE_DEV_GUILD_IDS
 from app import session as session_module
 from app.session import SessionRegistry
 
@@ -293,11 +293,12 @@ class TeaModeBot:
             self.client.user and self.client.user.id,
         )
 
-        if TEAMODE_DEV_GUILD_ID is not None:
-            guild = discord.Object(id=int(TEAMODE_DEV_GUILD_ID))
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            logger.info("Slash commands synced to guild %s", TEAMODE_DEV_GUILD_ID)
+        if TEAMODE_DEV_GUILD_IDS:
+            for gid in TEAMODE_DEV_GUILD_IDS:
+                guild = discord.Object(id=gid)
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                logger.info("Slash commands synced to guild %s", gid)
         else:
             logger.warning(
                 "TEAMODE_DEV_GUILD_ID is not set — skipping command registration. "
@@ -796,22 +797,15 @@ class TeaModeBot:
     # ------------------------------------------------------------------
 
     def _register_command(self) -> None:
-        """Register /teamode and /handoff on the command tree.
+        """Register /teamode and /handoff on the global command tree.
 
-        Guild-scoped when TEAMODE_DEV_GUILD_ID is set (instant propagation
-        during dev); global registration is skipped for MVP — global commands
-        take up to one hour to propagate and are not suitable for active dev.
+        Commands are registered globally here; on_ready copies them to each
+        guild in TEAMODE_DEV_GUILD_IDS for instant propagation during dev.
         """
-        guild_object: discord.Object | None = (
-            discord.Object(id=int(TEAMODE_DEV_GUILD_ID))
-            if TEAMODE_DEV_GUILD_ID is not None
-            else None
-        )
 
         @self.tree.command(
             name="teamode",
             description="Start a TeaMode focus session in this voice channel.",
-            guild=guild_object,
         )
         async def teamode(interaction: discord.Interaction) -> None:
             await self._handle_teamode(interaction)
@@ -819,7 +813,6 @@ class TeaModeBot:
         @self.tree.command(
             name="handoff",
             description="Transfer the facilitator role to another voice-channel member.",
-            guild=guild_object,
         )
         @app_commands.describe(
             member="The voice-channel member to make the new facilitator."
