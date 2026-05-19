@@ -36,6 +36,8 @@ Needs smoke test: run a 5-min session, confirm no `HTTP 40x editing timer messag
 _V1 work is tracked in `.apm/plan.md` once the Planner approves it.
 This section will populate after V1 ships._
 
+- add like whatever time it says it will be done by regroup to the voice channel status line, rename it to HH:MM, where HH remains HH and MM is the minutes of when the timer would complete and all participants are called to regroup.
+
 ---
 
 ## Next Major
