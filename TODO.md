@@ -43,6 +43,52 @@ Fixed in `app/bot.py` `IntentionModal.on_submit`: swapped `interaction.followup.
 `cast(discord.VoiceChannel, interaction.channel).send()` (regular `Message`, no expiry).
 Needs smoke test: run a 5-min session, confirm no `HTTP 40x editing timer message` warnings.
 
+### Groove Boogaloo pre-deployment checklist
+
+Items to investigate and resolve before deploying to the Groove Boogaloo
+testing server. See `docs/groove-boogaloo-deployment.md` for admin context.
+
+- **Per-user rate limiting (Option C).** Sliding 5-minute window per user:
+  allow the first 2 invocations freely, block on the 3rd+ until the window
+  clears. Ephemeral error message shows how many seconds remain. Combined with
+  a per-guild daily cap of 50 invocations (resets at midnight, in-memory).
+  Both checks happen at the top of the `/teamode` handler before session logic.
+  No new dependencies. Approved approach — implement before Groove deployment.
+
+- **Intention text privacy.** Currently saved unconditionally. Decide and
+  implement before deployment: either restrict persistence to a developer
+  allowlist (`interaction.user.id` check), make it opt-in, or strip it
+  entirely for non-developer accounts. See inbox item above for detail.
+
+- **Data anonymization / user ID decision.** Two user IDs are stored:
+  `facilitator_id` and `handoff_facilitator_id`. Decide whether to retain,
+  hash, or strip them before deployment. Aggregate stats (counts, durations,
+  emoji outcomes) may not require linking to a specific user. See inbox item
+  above for detail.
+
+- **`ffmpeg` startup probe.** Without `ffmpeg` on PATH, the reverie chime
+  silently fails and the bot disconnects mid-session with no user-facing
+  error. Add a `shutil.which("ffmpeg")` check at startup with a WARNING log.
+  Non-fatal — bot still starts, but the operator knows immediately. See
+  v1.x section below for implementation notes.
+
+- **Investigate: legal requirements for accepting donations (Ko-fi / Patreon
+  / PayPal).** If hosting ever moves off a personal PC and costs arise, is
+  it legal to accept voluntary contributions for a personal open-source-
+  adjacent project without a formal business entity? Questions to answer:
+  - Is donation income taxable in your jurisdiction? (Almost certainly yes
+    in the US — treated as self-employment or miscellaneous income above
+    the de minimis threshold.)
+  - Do Ko-fi / Patreon / PayPal require a business account, or is a personal
+    account sufficient for small voluntary contributions?
+  - PayPal: viable for international contributors; personal account works up
+    to certain volume thresholds before triggering reporting requirements.
+  - Ko-fi: takes 0% on the free tier (platform-funded by their own Pro
+    subscriptions); low friction for one-time micro-donations.
+  - Patreon: takes 5–12% platform fee; better for recurring subscriptions
+    than one-off cost recovery.
+  - Nothing to act on now — file this for if/when a real cost appears.
+
 ---
 
 ## Next Minor

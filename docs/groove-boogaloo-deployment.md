@@ -5,13 +5,15 @@ deploying Ocha (the TeaMode bot) on their server.
 
 **Throughline for every answer:** This is a free, optional, best-effort
 experiment. I'm not selling anything. The downside is bounded — if it breaks,
-the core Discord server is unaffected.
+the core Discord server is unaffected. The upside is a quality-of-life
+improvement for anyone who wants to focus without the friction of manually
+running a session.
 
 ---
 
 ## Stakeholder Interests
 
-### Admin interests
+### Admin interests (megan oregano)
 - Security: no harm to server members or server itself
 - Liability: no financial exposure to the server, its admins, or its members
 - Reliability: clear expectations so members aren't confused or disappointed
@@ -39,14 +41,29 @@ the core Discord server is unaffected.
 
 ### 1. Security & Privacy
 
-**Q: How secure is a free host? What is the host pulling from end users?**
+**Q: How secure is a free host? When something is free, the user is the
+product — what is the host pulling from end users?**
 
-There is no external host. The bot runs off my personal PC. The only party
-with access to anything is me.
+The premise of this question doesn't apply here: **there is no free host.**
+The "user is the product" concern is valid for free cloud platforms
+(Heroku, Railway, Render free tiers) where the platform company monetizes
+your traffic or data to fund its free tier. None of those are in use.
+The bot runs off my personal PC. There is no platform, no third party,
+no advertising network, no data broker in the chain. The only party with
+access to anything is me.
+
+**Q: What happens if usage exceeds limits? Is someone charged?**
+
+There are no external limits, because there is no external service.
+The "limit" is whether my PC is on and the bot process is running.
+If I turn it off, the bot goes offline — no overage, no charge,
+no bill. Nobody gets charged. See Hosting & Availability for the
+full picture.
 
 The bot itself collects the following per session, stored in a local SQLite
 database on my machine:
 - Discord user ID (numeric, not username) of the session facilitator
+- Discord user ID of the handoff facilitator, if the session was handed off
 - Session duration chosen
 - Session start/end timestamps
 - Follow-up emoji response (✅/❌ or equivalent)
@@ -81,9 +98,10 @@ What's the expected uptime?**
 
 **There is currently no external host.** The bot runs off my personal PC.
 It is live when my PC is on and I've started it. When my PC is off, or I stop
-the process, the bot is offline. Discord will show the bot as offline and any
-attempt to run `/teamode` will simply fail to respond — no crash, no error
-cascade, just unavailable.
+the process, the bot is offline. The bot's user will appear offline in the
+server member list. Any attempt to run `/teamode` will receive a Discord
+"The application did not respond" timeout — no crash, no error cascade, just
+unavailable.
 
 This is intentional for the experiment phase. At worst this is the exact same
 status quo Groovers have had for the past year — the bot simply doesn't exist
@@ -99,6 +117,19 @@ running it, I would consider the following options in order:
 
 I am not currently planning to use a free or paid VPS, and none of these
 decisions need to be made now.
+
+**If scaling past the experimental phase becomes a question:**
+The bot is deliberately lightweight — Python, SQLite, one audio file. It does
+not need significant compute. Rough estimates for context (not commitments):
+- *Raspberry Pi / micro-PC home server:* ~$35–100 one-time hardware cost,
+  no ongoing hosting fee, always-on as long as my home internet is up.
+- *Cheapest VPS (e.g. Hetzner, Fly.io):* ~$4–6/month. Fully managed by me,
+  no exposure to the community.
+- *At Groove Boogaloo's current and historical scale,* the bot's resource
+  footprint is negligible — this is not a traffic problem, it's a "is it
+  running" problem.
+If this question ever becomes real, I'd share options and costs transparently
+before making any move.
 
 **Expected uptime:** Best-effort. I'll run it when I'm around. This is an
 experiment, not infrastructure.
@@ -120,6 +151,11 @@ at this stage.
 If someday there were a donation model, it would be entirely optional and
 transparent — people could see how much the server costs and decide whether to
 contribute. But that is hypothetical; right now there is no cost to pass on.
+If it ever came to that, the threshold would be something like "at least one
+month of server costs covered" before collecting anything (~$5–6 at VPS
+scale). I'd manage it personally — likely via Ko-fi or PayPal to accommodate
+international contributors. Nothing would be collected until there was a real
+cost to offset.
 
 **The admins and the community bear zero financial liability.** There is no
 scenario in which using this bot results in a charge to the server, its admins,
@@ -215,23 +251,31 @@ and give feedback.
 
 A few things, all of them honest:
 
-1. **Curiosity.** I built this and it works. I want to see how real people
+1. **It's a useful thing I made.** 
+   I wanted to solve a problem, I solved it, and I thought Groovers might
+   appreciate the optional functionality. It's a little bit of what was good about Groove bringing back with the help of software.
+
+2. **Curiosity.** I built this and it works. I want to see how real people
    outside my own server actually use it — what session lengths are popular,
    whether people report success or struggle, how often it gets used at all.
-   That data stays with me for my own analysis; it's not monetized.
+   The stats I'm interested in (session counts, durations, success/struggle
+   rate) do not require knowing who ran the session. Before deployment I'll
+   drop or anonymize any user-identifying fields so the data is aggregate only
+   — see the Research Findings section for what that means in practice at
+   Groove Boogaloo's scale. If the admins would rather I collect no stats at
+   all, that's a reasonable ask and I'm open to discussing it. The bot is
+   entirely optional either way.
 
-2. **Proof of concept.** I've been using this on another server for a few
+3. **Proof of concept.** I've been using this on another server for a few
    weeks. Groove Boogaloo would be the first external beta test. Seeing
    whether Groovers adopt it tells me something real that I can't get from
    testing alone.
 
-3. **Portfolio.** If this proves useful, it becomes something I can point to
+4. **Portfolio.** If this proves useful, it becomes something I can point to
    as a real-world deployed project when I'm looking for future work. I retain
    all rights to the code.
 
-4. **It's just a fun thing I made.** I'm not trying to build a business here.
-   I wanted to solve a problem, I solved it, and I thought Groovers might
-   appreciate the optional functionality.
+
 
 I do not intend to profit from this on the Groove Boogaloo server.
 
@@ -242,7 +286,7 @@ I do not intend to profit from this on the Groove Boogaloo server.
 The code is proprietary — I retain all rights. I'm not sharing the source
 publicly at this time and I'm not licensing it for reuse or redistribution.
 
-I may open-source it in the future on my own timeline if I decide to, but
+I may open-source it in the future as it gets more stable and gets more real world use if I decide to, but
 that's my call.
 
 If admins want to verify what the bot does and what permissions it holds, the
@@ -261,6 +305,11 @@ to try in about 5 minutes.** You'll see exactly what it does, what permissions
 it requests, and what the experience looks like for a facilitator — no
 commitment, no rollout to the community yet.
 
+**Communication status:**
+- Screenshots of the bot in action: sent
+- Screen recording: not yet
+- Developer Discord handle: already shared
+
 ---
 
 ## Open TODOs
@@ -276,3 +325,180 @@ commitment, no rollout to the community yet.
   best-effort, maintained by one person
 - [ ] **Known-issues page or pinned message** — simple place to check status
   if the bot is down
+
+---
+
+## Audit Notes (pre-deployment code review)
+
+Findings from a code review of `app/bot.py`, `app/session.py`, `app/db.py`,
+`app/voice.py` against the claims in this doc.
+
+### Confirmed accurate
+- **Permissions:** Intents are minimal — `guilds`, `voice_states`, `reactions`
+  only. `message_content` and `members` are not enabled. The bot provably
+  cannot read message history, send DMs, or fetch member lists.
+- **Voice audio:** The bot only plays `reverie.wav` outbound via
+  `FFmpegPCMAudio`. No `listen()` call exists anywhere. No recording.
+- **Session isolation:** One active session per text channel, enforced as a
+  hard invariant. Concurrent sessions in different channels run independently
+  with no shared state.
+
+### Gaps corrected in this doc
+- **`handoff_facilitator_id`:** The sessions table stores a second Discord
+  user ID if a facilitator handoff fires. Added to the data disclosure above.
+- **Offline UX:** When the bot is down, users see Discord's generic
+  "The application did not respond" timeout — not a clean "bot is offline"
+  message. Corrected above.
+
+### Open pre-deployment items (code not yet written)
+- **Intention text privacy:** Unconditionally saved today. Needs conditional
+  logic or opt-in before community rollout.
+- **User ID anonymization:** Both `facilitator_id` and
+  `handoff_facilitator_id` are stored indefinitely, with an index on the
+  former. Decision pending — see TODO.md.
+- **Per-user rate limiting:** No invocation cooldown or daily cap exists.
+  Any member in a voice channel can call `/teamode` repeatedly. Low risk at
+  current server scale; a guard is planned before deployment.
+- **`ffmpeg` startup probe:** If `ffmpeg` is missing on the host, the
+  end-of-session chime silently fails and the bot disconnects. No startup
+  warning exists yet.
+
+---
+
+## Research Findings
+
+### Data Anonymization
+
+#### Background: what "truly anonymous" means
+
+True anonymization is irreversible — it permanently strips data of its
+personal status. Unlike pseudonymization (replacing an ID with a hash you
+could theoretically reverse), true anonymization means no path back to the
+individual exists. Regulations like GDPR treat truly anonymized data as
+outside their scope entirely.
+
+Because absolute anonymization often destroys data utility, privacy
+engineers use specific techniques to balance the two:
+
+**The 4 core techniques:**
+
+1. **Randomization** — Alter data values so they no longer correspond to a
+   specific person while keeping overall statistical trends. Examples:
+   adding mathematical noise to numbers, or shuffling traits among records.
+
+2. **Generalization** — Reduce precision to group individuals together.
+   E.g. exact birthdate `1994-05-14` → age bracket `30–35`; exact GPS
+   coordinate → city region.
+
+3. **Data masking** — Permanently strip or blank out identifying columns
+   entirely (e.g. remove all user IDs from the table).
+
+4. **Synthetic data generation** — Use an AI model to study the real
+   dataset and produce a fake dataset with the same statistical properties
+   but zero real records.
+
+**Advanced mathematical frameworks** (referenced for completeness; overkill
+at this scale):
+
+- **k-Anonymity:** A dataset satisfies k-anonymity if every individual's
+  identifying traits match at least k−1 other people in the dataset,
+  making it impossible to single anyone out. Requires a population large
+  enough to form groups.
+
+- **Differential Privacy (gold standard):** Injects calibrated mathematical
+  noise into queries so an observer cannot determine whether any specific
+  person's data was used to compute a statistic. Prevents re-identification
+  attacks. Meaningful only at statistical scale — not applicable to
+  ~15 active users.
+
+**The core trade-off:**
+
+```
+[TRULY ANONYMOUS] <-----------------------------------------> [HIGH UTILITY]
+Aggregate counts / masking          HMAC pseudonym        Raw user ID
+No re-identification risk           Brute-forceable        Full exposure
+Sufficient for this use case        False sense of safety  Not acceptable
+```
+
+#### Option A: HMAC Pseudonymization
+
+Store `HMAC-SHA256(secret_key, str(user_id))` instead of the raw Discord ID.
+Same user always produces the same digest — you can detect "this person ran
+3 sessions this week" without storing the raw ID. Key lives in the
+environment alongside `DISCORD_BOT_TOKEN`.
+
+**Pros:**
+- Repeat-user tracking still possible (same hash = same person)
+- Feels technically rigorous
+- Standard approach in larger systems
+
+**Cons — critical at Groove Boogaloo's scale (120 total users, ~15 active):**
+- Discord user IDs are a small, enumerable input space. With only 120 known
+  users, an attacker who obtains the HMAC key can reverse every hash by
+  iterating those 120 IDs in milliseconds. This is the same attack that
+  reversed NYC taxi medallion hashes in under an hour on a much larger set.
+- The key must be protected with the same rigour as the bot token. If it
+  leaks, all pseudonymization is retroactively broken.
+- Key rotation invalidates all existing hashes, making historical data
+  unresolvable.
+- Adds environmental complexity (new secret to manage) for marginal gain.
+
+**Verdict at this scale: security theatre.** HMAC makes sense when the input
+space is large enough that brute-force is infeasible. At 120 users it is not.
+
+#### Option B: Aggregate counts only — drop the user ID (recommended)
+
+Store only the stats that answer the actual questions: total sessions per
+day/week, duration distribution, emoji outcome rate (success vs. struggle).
+Never write a user ID to the database at all. A separate `stats` table with
+`(week_bucket TEXT, duration_minutes INT, outcome INT)` covers everything.
+
+**Pros:**
+- Truly anonymous — no identifier exists to reverse, brute-force, or leak
+- No secret key to manage or rotate
+- Simpler code, simpler schema
+- The stats Jonathan actually wants (how many sessions? what duration? do
+  people feel they succeeded?) require no per-user linkage
+- At 15 active users, per-user repeat tracking adds no analytical value —
+  the sample is already too small for individual-level insights to be
+  meaningful
+
+**Cons:**
+- Cannot answer "did this specific user run 5 sessions this month?" —
+  but that question is not needed for the stated goals
+- Cannot detect if one person is inflating session counts — mitigated by
+  the per-user rate limiting guard (separate feature)
+
+**Verdict: the right approach for this project and this scale.** Drop
+`facilitator_id` and `handoff_facilitator_id` from the schema before
+deployment. Keep only aggregate fields. True anonymization with no tradeoff
+at 120 users.
+
+---
+
+### Donations & Legal Requirements (US)
+
+**IRS 1099-K threshold (2025 onward):** Platforms (Ko-fi, PayPal, Patreon)
+are only required to issue a 1099-K if you receive **more than $20,000 AND
+over 200 transactions** in a calendar year. This threshold was restored by
+the One Big Beautiful Bill Act of 2025. At $5–6/month VPS cost-recovery
+scale, this is unreachable.
+
+**Is it still taxable below the threshold?** Technically yes — the 1099-K
+threshold is a reporting trigger for the platform, not a taxability cutoff.
+However: voluntary Ko-fi-style tips where nothing is given in return are
+closer to gifts in IRS framing. At under ~$200/year, virtually all hobbyist
+maintainers report nothing. If reported, it goes on Schedule 1 as hobby
+income (not Schedule C — no self-employment tax).
+
+**Platform comparison:**
+
+| Platform | Fee | Account needed | Best for |
+|---|---|---|---|
+| Ko-fi | 0% (free tier) | Personal | One-time tips, cost recovery |
+| PayPal | ~2.9% + $0.30 | Personal (up to volume threshold) | International contributors |
+| Patreon | 5–12% | Personal | Recurring subscriptions |
+
+**Conclusion:** Ko-fi personal account, no business entity needed. Nothing
+to act on until a real hosting cost exists. If international contributors
+are expected, PayPal as a secondary option.
