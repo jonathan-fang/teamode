@@ -9,6 +9,20 @@ Breakdown is complete — not here.
 
 - run it by megan if they're interested in me testing out my discord bot? plan for hosting would be a free aws thing or something, and atm i can run it from my pc to test it out and see if people like it? i've been using it for a month, so say like early june or something, been using it for 2-3 weeks now. from May 10, 2026
 
+- **Intention text privacy:** Before deploying to Groove Boogaloo, add option
+  to not persist intention text to the database unless `interaction.user.id`
+  matches a configured allowlist (e.g. developer account). Keeps personal
+  intentions private for non-developer users.
+
+- **Data anonymization question:** The current DB stores `facilitator_id`
+  (Discord user ID) on every session row, with an index on it. Before
+  deployment, decide: is it possible to strip or hash user IDs and still get
+  meaningful aggregate stats (session counts, durations, emoji outcomes)?
+  Or does linking sessions to a user ID add value (e.g. repeat-user tracking)
+  that justifies keeping it? If stripping is viable, consider a separate
+  aggregated stats table and dropping `facilitator_id` from what gets retained
+  long-term.
+
 ---
 
 ## Next Patch
