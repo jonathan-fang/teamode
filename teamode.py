@@ -1,6 +1,7 @@
 """TeaMode entry point — orchestration only, no business logic."""
 
 import logging
+import sys
 
 import app.db as db
 from app.bot import TeaModeBot
@@ -15,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    sys.stdout.write("\x1b]0;TeaMode\x07")
+    sys.stdout.flush()
     # Redact token to last-four characters for startup log.
     last_four = DISCORD_BOT_TOKEN[-4:]
     logger.info("Starting TeaMode (Ocha) — token: ****%s", last_four)

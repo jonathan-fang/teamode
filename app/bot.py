@@ -301,7 +301,10 @@ class TeaModeBot:
                     await self.tree.sync(guild=guild)
                     logger.info("Slash commands synced to guild %s", gid)
                 except discord.Forbidden:
-                    logger.warning("Cannot sync commands to guild %s — bot lacks access, skipping", gid)
+                    logger.warning(
+                        "Cannot sync commands to guild %s — bot lacks access, skipping",
+                        gid,
+                    )
         else:
             logger.warning(
                 "TEAMODE_DEV_GUILD_ID is not set — skipping command registration. "
