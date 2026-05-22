@@ -309,3 +309,57 @@ I'm happy to deploy it on the testing server (it takes like 5 minutes, server
 ID, and manage permissions) and show you all what it does. I hope I've
 addressed your questions and I look forward to showing y'all my tea-themed
 GUI app for the server 😆
+
+---
+
+## Admin Reply (2026-05-22)
+- Megan Megarita - replied
+- Megan oregano - initial concerns
+
+Hey Jonathan, we've done a lot of discussing and appreciate the offer to use
+the bot, but I think at this point it may open more problems for us than solve.
+Given that you would be responsible for trouble shooting/the sole source of the
+bot running and our conflicting time zones, I anticipate that I would become
+the de facto point person for anyone working earlier in the day which I'm not
+completely comfortable with. We also have a lot of discord members who were
+very concerned about privacy/access with any bots coming in and it feels like
+we would forgoing those concerns. We can absolutely revisit in the future
+when/if the bot is fully developed, has a wiki, runs without your intervention,
+etc. but I think for right now the simplest solution is to carry on as we have
+been for the time being. While all of us in this channel are tech savvy enough
+to figure it out, we do have a significant number of members who needed intense
+hand holding to even figure out how to join a video call so I'm afraid it may
+be too much for them. Hope you understand.
+
+---
+
+## Jonathan's Reply (2026-05-22)
+
+Thanks for the reply.
+
+I appreciate you being direct. If you're ever interested in interacting and
+seeing it live on the testing server, I would be happy to show you all and
+collect feedback on improving this program in the longer term. Either way, I
+have no hard feelings.
+
+---
+
+## Post-Mortem Notes
+
+**Diplomatic situation.** The admin gave a genuine, considered "not right
+now" — time zones, community support burden, member privacy concerns. Reply
+sent was one sentence leaving the testing server door open, no counter-argument,
+no debate. Correct call. Pressing the logic would have read as dismissive of
+real concerns and closed the door harder. Relationship intact, option to revisit
+remains open.
+
+**The "fully developed / wiki / runs without intervention" bar.** This is a
+catch-22 and worth naming clearly for future reference: the conditions required
+to get community buy-in (mature product, documentation, always-on hosting) are
+exactly the conditions that require community beta testers to achieve. A
+genuinely finished, wiki'd, always-on bot doesn't need an experimental community
+rollout — it already has one. This bar can't be met in advance; it can only be
+met by doing the thing they're asking you to do first. File as: standard
+institutional resistance to anything pre-1.0, not a genuine objection to resolve.
+If the conversation ever reopens, the right framing is "help me get it there"
+not "here's the finished thing."
