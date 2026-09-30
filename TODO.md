@@ -121,3 +121,7 @@ until promoted.
   without Manage Messages and confirm the ephemeral refusal "You need
   the Manage Messages permission to run /teamode-clear." (other smoke
   steps passed; delete pacing via `CLEAR_DELETE_INTERVAL_SECONDS`).
+
+minor detail for name of cmds in teamode, clear, stats, handoff or like teamode-handoff? Probably teamode handoff? Auto completion in discord easier to see all teamode related commands from input text bar
+- [ ] Apparently ocha doesn't need manage messages to delete it's own messages, including old ones? So I could have it so that anybody can trigger it, is that desired? Minor to input in Todo md, not planning to touch it for another quarter. There will never be a time a codebase considered nothing can be improved or change because circumstances change .
+- [ ] minor generate art doesn't really belong in git it's a one time thing ...? Also ai art controversial atm 
