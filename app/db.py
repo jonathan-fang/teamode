@@ -223,19 +223,27 @@ def update_cancelled(
     conn.commit()
 
 
-def reconcile_crashed_sessions(conn: sqlite3.Connection) -> int:
+def reconcile_crashed_sessions(conn: sqlite3.Connection) -> list[str]:
     """On startup, mark any non-terminal sessions as 'crashed'.
 
     Sets status='crashed' and ended_at=now() for any row whose status is in
     ('pending', 'intention_set', 'active', 'followup').
 
-    Returns the number of rows reconciled.
+    Returns the ``voice_channel_id`` of each row reconciled, selected before
+    the UPDATE in the same transaction, so the caller can reset those
+    channels' voice status.
     """
-    ts = _now_utc()
     placeholders = ",".join("?" * len(_NON_TERMINAL_STATUSES))
     cur = conn.execute(
+        f"SELECT voice_channel_id FROM sessions WHERE status IN ({placeholders})",  # noqa: S608
+        _NON_TERMINAL_STATUSES,
+    )
+    voice_channel_ids = [row[0] for row in cur.fetchall()]
+
+    ts = _now_utc()
+    conn.execute(
         f"UPDATE sessions SET status = 'crashed', ended_at = ? WHERE status IN ({placeholders})",  # noqa: S608
         (ts, *_NON_TERMINAL_STATUSES),
     )
     conn.commit()
-    return cur.rowcount
+    return voice_channel_ids
