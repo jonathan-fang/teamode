@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
@@ -27,7 +28,12 @@ from app.constants import (
     TEAMODE_COMMAND_DESCRIPTION,
     WELCOME_PROMPT_DELAY_SECONDS,
 )
-from app.discord_bot.views import COLORS, _build_timer_view, _build_welcome_embed
+from app.discord_bot.views import (
+    COLORS,
+    _build_timer_view,
+    _build_welcome_embed,
+    _SetupMessages,
+)
 from app.rate_limit import RateLimiter
 from app.session import SessionRegistry
 
@@ -43,6 +49,12 @@ class CommandsMixin:
     tree: app_commands.CommandTree
     _registry: SessionRegistry
     _rate_limiter: RateLimiter
+    _setup_messages: dict[int, _SetupMessages]
+
+    if TYPE_CHECKING:
+        # Provided by LifecycleMixin — declared here, type-checking only,
+        # so pyright can check this mixin's own methods in isolation.
+        def _arm_pending_expiry(self, session_id: int) -> None: ...
 
     def _register_command(self) -> None:
         """Register /teamode and /handoff on the global command tree.
@@ -168,6 +180,19 @@ class CommandsMixin:
         view = _build_timer_view(session.session_id)
 
         await interaction.response.send_message(embed=embed, view=view)
+
+        # Capture the welcome message id — all later edits/deletes go
+        # through the channel, never through the interaction webhook, since
+        # interaction tokens expire well before a session ends.
+        welcome_message = await interaction.original_response()
+        self._setup_messages[session.session_id] = _SetupMessages(
+            channel_id=interaction.channel.id,
+            welcome_message_id=welcome_message.id,
+        )
+
+        # Arm the pending-expiry watchdog — cancelled once a duration is
+        # picked (see ViewsMixin._handle_timer_pick).
+        self._arm_pending_expiry(session.session_id)
 
         # Post the participant prompt after the welcome embed.
         await asyncio.sleep(WELCOME_PROMPT_DELAY_SECONDS)

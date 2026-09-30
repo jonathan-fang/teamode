@@ -18,13 +18,22 @@ from app.constants import (
     FOLLOWUP_PROMPT,
     FOLLOWUP_TIMEOUT_SECONDS,
     FOLLOWUP_WHY_PROMPT,
+    MSG_PENDING_EXPIRED,
+    PENDING_TIMEOUT_SECONDS,
     REFLECT_EMBED_DESCRIPTION,
     REFLECT_EMBED_TITLE,
     SOLO_GRACE_ENDED,
     SOLO_GRACE_SECONDS,
 )
-from app.discord_bot.views import COLORS, _EditState
-from app.session import SessionRegistry
+from app.discord_bot.tasks import spawn_logged
+from app.discord_bot.views import (
+    COLORS,
+    _build_timer_view,
+    _build_welcome_embed,
+    _EditState,
+    _SetupMessages,
+)
+from app.session import SessionRegistry, SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +54,106 @@ class LifecycleMixin:
     _countdown_tasks: dict[int, asyncio.Task[None]]
     _voice_clients: dict[int, discord.VoiceClient]
     _edit_states: dict[int, _EditState]
+    _pending_expiry_tasks: dict[int, asyncio.Task[None]]
+    _setup_messages: dict[int, _SetupMessages]
+
+    # ------------------------------------------------------------------
+    # Centralized terminal-state cleanup
+    # ------------------------------------------------------------------
+
+    def _on_session_terminal(self, session_id: int) -> None:
+        """Cancel/clear every per-session background task and in-memory
+        state entry for *session_id*.
+
+        Called at every terminal transition (completed, followup_timeout,
+        cancelled — including pending expiry and solo-grace timeout).
+        Idempotent: each pop is a no-op when the key is already gone, so
+        callers that already did some of this cleanup themselves are safe
+        to call it again. Later work extends this with setup-message
+        deletion and voice-channel status.
+        """
+        current = asyncio.current_task()
+        for task_map in (
+            self._pending_expiry_tasks,
+            self._watchdog_tasks,
+            self._solo_grace_tasks,
+            self._countdown_tasks,
+        ):
+            task = task_map.pop(session_id, None)
+            if task is not None and task is not current and not task.done():
+                task.cancel()
+        self._edit_states.pop(session_id, None)
+        self._voice_clients.pop(session_id, None)
+
+    # ------------------------------------------------------------------
+    # Pending-session expiry
+    # ------------------------------------------------------------------
+
+    def _arm_pending_expiry(self, session_id: int) -> None:
+        """Spawn the pending-expiry watchdog for a freshly created session."""
+        task = spawn_logged(
+            self._run_pending_expiry(session_id=session_id),
+            name=f"pending-expiry:{session_id}",
+        )
+        self._pending_expiry_tasks[session_id] = task
+
+    async def _run_pending_expiry(
+        self,
+        *,
+        session_id: int,
+        sleep_seconds: float = PENDING_TIMEOUT_SECONDS,
+    ) -> None:
+        """Cancel *session_id* if it is still PENDING after *sleep_seconds*.
+
+        Cancelled (via ``_pending_expiry_tasks[session_id].cancel()``) once
+        a duration is picked — see ``ViewsMixin._handle_timer_pick``. This
+        is the one terminal path that edits the welcome message rather than
+        deleting it (deletion is for the messages of a session that
+        actually ran).
+        """
+        try:
+            await asyncio.sleep(sleep_seconds)
+        except asyncio.CancelledError:
+            return
+
+        session = self._registry.get(session_id)
+        if session is None or session.state != SessionState.PENDING:
+            # Already advanced or cleaned up — nothing to expire.
+            return
+
+        self._registry.mark_cancelled(session_id=session_id)
+
+        setup = self._setup_messages.get(session_id)
+        if setup is not None:
+            channel = self.client.get_channel(setup.channel_id)
+            if isinstance(channel, discord.VoiceChannel):
+                try:
+                    partial = channel.get_partial_message(setup.welcome_message_id)
+                    await partial.edit(
+                        content=MSG_PENDING_EXPIRED,
+                        embed=_build_welcome_embed(),
+                        view=_build_timer_view(session_id, disabled=True),
+                    )
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logger.warning(
+                        "Failed to edit welcome message on pending expiry"
+                        " for session %s",
+                        session_id,
+                    )
+            else:
+                logger.warning(
+                    "Channel %s for session %s is not a VoiceChannel —"
+                    " skipping pending-expiry edit",
+                    setup.channel_id,
+                    session_id,
+                )
+
+        logger.info(
+            "Pending session %s expired after %ss with no duration picked",
+            session_id,
+            sleep_seconds,
+        )
+        self._on_session_terminal(session_id)
 
     async def _run_end_of_session(
         self,
@@ -133,8 +242,9 @@ class LifecycleMixin:
                 "Follow-up watchdog fired for session %s — marked followup_timeout",
                 session_id,
             )
+            self._on_session_terminal(session_id)
 
-        task: asyncio.Task[None] = asyncio.create_task(_watchdog())
+        task = spawn_logged(_watchdog(), name=f"followup-watchdog:{session_id}")
         self._watchdog_tasks[session_id] = task
 
     async def on_raw_reaction_add(
@@ -163,7 +273,6 @@ class LifecycleMixin:
         session = self._registry.get(session_id)
         if session is None:
             return
-        from app.session import SessionState
 
         if session.state != SessionState.FOLLOWUP:
             return
@@ -196,6 +305,7 @@ class LifecycleMixin:
                 completed_intention=1,
                 followup_note=None,
             )
+            self._on_session_terminal(session_id)
         else:
             # ⛔ — record incomplete, then post the "why" prompt.
             self._registry.mark_completed(
@@ -203,6 +313,7 @@ class LifecycleMixin:
                 completed_intention=0,
                 followup_note=None,
             )
+            self._on_session_terminal(session_id)
             channel = self.client.get_channel(int(session.text_channel_id))
             if isinstance(channel, discord.abc.Messageable):
                 await channel.send(
@@ -210,8 +321,8 @@ class LifecycleMixin:
                 )
             elif channel is not None:
                 logger.warning(
-                    "Channel %s for session %s is not sendable — "
-                    "skipping follow-up why prompt",
+                    "Channel %s for session %s is not sendable —"
+                    " skipping follow-up why prompt",
                     session.text_channel_id,
                     session_id,
                 )
@@ -278,7 +389,7 @@ class LifecycleMixin:
             # Solo leave — arm the 5-minute rejoin watchdog.
             # Defensive guard: if one is already pending, don't double-arm.
             if session.session_id not in self._solo_grace_tasks:
-                task = asyncio.create_task(
+                task = spawn_logged(
                     self._run_solo_grace(session_id=session.session_id),
                     name=f"solo-grace:{session.session_id}",
                 )
@@ -384,3 +495,5 @@ class LifecycleMixin:
                 "Failed to mark session %s cancelled on solo-grace timeout",
                 session_id,
             )
+
+        self._on_session_terminal(session_id)

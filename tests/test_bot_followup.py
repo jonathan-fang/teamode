@@ -161,7 +161,7 @@ async def test_end_of_session_sequence_happy_path(
 
     captured_coros: list[Any] = []
 
-    def _capture_and_discard(coro: Any) -> MagicMock:
+    def _capture_and_discard(coro: Any, **_kwargs: Any) -> MagicMock:
         captured_coros.append(coro)
         t = MagicMock()
         t.cancel = MagicMock()
@@ -172,7 +172,7 @@ async def test_end_of_session_sequence_happy_path(
         return_value=True,
     ) as mock_play:
         with patch(
-            "app.discord_bot.lifecycle.asyncio.create_task",
+            "app.discord_bot.tasks.asyncio.create_task",
             side_effect=_capture_and_discard,
         ) as mock_create_task:
             await bot._run_end_of_session(
@@ -251,7 +251,7 @@ async def test_end_of_session_empty_voice_channel(
 
     captured_coros: list[Any] = []
 
-    def _cap(coro: Any) -> MagicMock:
+    def _cap(coro: Any, **_kwargs: Any) -> MagicMock:
         captured_coros.append(coro)
         return MagicMock()
 
@@ -259,7 +259,7 @@ async def test_end_of_session_empty_voice_channel(
         "app.discord_bot.lifecycle.voice.play_reverie_then_disconnect",
         return_value=True,
     ):
-        with patch("app.discord_bot.lifecycle.asyncio.create_task", side_effect=_cap):
+        with patch("app.discord_bot.tasks.asyncio.create_task", side_effect=_cap):
             await bot._run_end_of_session(
                 session_id=sid,
                 voice_client=fake_vc,
@@ -297,7 +297,7 @@ async def test_end_of_session_reverie_failure_logs_warning(
 
     captured_coros: list[Any] = []
 
-    def _cap(coro: Any) -> MagicMock:
+    def _cap(coro: Any, **_kwargs: Any) -> MagicMock:
         captured_coros.append(coro)
         return MagicMock()
 
@@ -306,9 +306,7 @@ async def test_end_of_session_reverie_failure_logs_warning(
             "app.discord_bot.lifecycle.voice.play_reverie_then_disconnect",
             return_value=False,
         ):
-            with patch(
-                "app.discord_bot.lifecycle.asyncio.create_task", side_effect=_cap
-            ):
+            with patch("app.discord_bot.tasks.asyncio.create_task", side_effect=_cap):
                 await bot._run_end_of_session(
                     session_id=sid,
                     voice_client=fake_vc,
@@ -593,7 +591,7 @@ async def test_watchdog_fires_marks_followup_timeout(
 
     captured_coro: list[Any] = []
 
-    def _capture_task(coro: Any) -> MagicMock:
+    def _capture_task(coro: Any, **_kwargs: Any) -> MagicMock:
         captured_coro.append(coro)
         t = MagicMock()
         t.cancel = MagicMock()
@@ -604,7 +602,7 @@ async def test_watchdog_fires_marks_followup_timeout(
         return_value=True,
     ):
         with patch(
-            "app.discord_bot.lifecycle.asyncio.create_task", side_effect=_capture_task
+            "app.discord_bot.tasks.asyncio.create_task", side_effect=_capture_task
         ):
             await bot._run_end_of_session(
                 session_id=sid,

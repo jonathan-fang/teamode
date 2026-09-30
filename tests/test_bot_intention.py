@@ -273,7 +273,7 @@ async def test_modal_submit_records_intention_and_posts_timer(
 
     fake_voice_client = AsyncMock()
 
-    def _close_coro(coro: object) -> None:
+    def _close_coro(coro: object, **_kwargs: object) -> None:
         # Close the coroutine so Python does not warn about it being unawaited.
         if hasattr(coro, "close"):
             coro.close()  # type: ignore[union-attr]
@@ -283,7 +283,7 @@ async def test_modal_submit_records_intention_and_posts_timer(
             "app.discord_bot.views.voice.connect", return_value=fake_voice_client
         ) as mock_connect,
         patch(
-            "app.discord_bot.views.asyncio.create_task", side_effect=_close_coro
+            "app.discord_bot.tasks.asyncio.create_task", side_effect=_close_coro
         ) as mock_create_task,
     ):
         await modal.on_submit(inter)
@@ -356,7 +356,7 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
 
     with (
         patch("app.discord_bot.views.voice.connect", side_effect=Exception("no voice")),
-        patch("app.discord_bot.views.asyncio.create_task") as mock_create_task,
+        patch("app.discord_bot.tasks.asyncio.create_task") as mock_create_task,
     ):
         await modal.on_submit(inter)
 
