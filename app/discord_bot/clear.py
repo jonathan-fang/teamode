@@ -132,9 +132,11 @@ class ClearMixin:
         channel_id = channel.id
         protected = self._protected_message_ids(channel_id)
 
+        # Only Ocha's own messages — other bots' messages are never touched.
+        bot_id = self.client.user.id if self.client.user else None
         deleted_count = 0
         async for message in channel.history(limit=CLEAR_SCAN_LIMIT):
-            if not message.author.bot:
+            if bot_id is None or message.author.id != bot_id:
                 continue
             if message.id in protected:
                 continue

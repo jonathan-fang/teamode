@@ -43,6 +43,10 @@ from app.session import SessionRegistry
 # Fixtures and fakes
 # ---------------------------------------------------------------------------
 
+BOT_USER_ID = 999
+OTHER_BOT_USER_ID = 888
+HUMAN_USER_ID = 777
+
 
 @pytest.fixture()
 def conn() -> sqlite3.Connection:
@@ -56,7 +60,14 @@ def registry(conn: sqlite3.Connection) -> SessionRegistry:
 
 @pytest.fixture()
 def bot(conn: sqlite3.Connection, registry: SessionRegistry) -> TeaModeBot:
-    return TeaModeBot(conn=conn, registry=registry)
+    bot = TeaModeBot(conn=conn, registry=registry)
+    # discord.Client.user is a read-only property; swap the client for a
+    # fake whose .user.id identifies Ocha's own messages.
+    fake_client = MagicMock(spec=discord.Client)
+    fake_client.user = MagicMock()
+    fake_client.user.id = BOT_USER_ID
+    bot.client = fake_client
+    return bot
 
 
 class _FakeEmbed:
@@ -74,6 +85,7 @@ class FakeMessage:
         content: str = "",
         embed_titles: list[str] | None = None,
         author_bot: bool = True,
+        author_id: int | None = None,
         delete: AsyncMock | None = None,
     ) -> None:
         self.id = message_id
@@ -81,6 +93,9 @@ class FakeMessage:
         self.embeds = [_FakeEmbed(t) for t in (embed_titles or [])]
         author = MagicMock()
         author.bot = author_bot
+        if author_id is None:
+            author_id = BOT_USER_ID if author_bot else HUMAN_USER_ID
+        author.id = author_id
         self.author = author
         self.delete = delete if delete is not None else AsyncMock()
 
@@ -243,6 +258,22 @@ async def test_non_bot_messages_are_kept(bot: TeaModeBot) -> None:
     await bot._handle_clear(interaction)
 
     human_message.delete.assert_not_awaited()
+    interaction.followup.send.assert_awaited_once_with(CLEAR_NOTHING, ephemeral=True)
+
+
+@pytest.mark.asyncio
+async def test_other_bots_messages_are_kept(bot: TeaModeBot) -> None:
+    # Another bot (e.g. a second TeaMode instance) posting identical copy is
+    # not Ocha — only messages authored by this bot's own user are deleted.
+    other_bot_message = FakeMessage(
+        1, content=CHAIN_PROMPT, author_id=OTHER_BOT_USER_ID
+    )
+    channel = _make_channel([other_bot_message])
+    interaction = _make_clear_interaction(channel)
+
+    await bot._handle_clear(interaction)
+
+    other_bot_message.delete.assert_not_awaited()
     interaction.followup.send.assert_awaited_once_with(CLEAR_NOTHING, ephemeral=True)
 
 
