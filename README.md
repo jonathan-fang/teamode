@@ -1,5 +1,14 @@
 # TeaMode
 
+![TeaMode](assets/app-banner.png)
+
+![Python](https://img.shields.io/badge/python-3.12+-blue?style=for-the-badge)
+![pytest](https://img.shields.io/badge/pytest-330%20passing-brightgreen?style=for-the-badge)
+![pyright](https://img.shields.io/badge/pyright-0%20errors-blue?style=for-the-badge)
+![ruff](https://img.shields.io/badge/ruff-passing-brightgreen?style=for-the-badge)
+![platform](https://img.shields.io/badge/platform-WSL-lightgrey?style=for-the-badge)
+![version](https://img.shields.io/badge/version-v26Q3.0.0.0-orange?style=for-the-badge)
+
 A self-hosted Discord bot that runs FLOWN/Groove-style guided co-working
 sessions in voice channels. Built around `/teamode` — a facilitator-led
 flow that walks you and your friends through a focus block: pick a

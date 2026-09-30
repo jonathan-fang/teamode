@@ -65,6 +65,32 @@ ships. Promote to a release-target queue when ready.
   `AsyncMock` configured to avoid the warning) rather than living with
   the noise.
 
+- **`voice.play_reverie()` is dead in production** — only
+  `tests/test_voice.py` calls it directly; the real runtime path
+  (`voice.play_reverie_then_disconnect()`, used by `lifecycle.py` and
+  `breaks.py`) reimplements the same `voice_client.play(FFmpegPCMAudio(
+  REVERIE_PATH), after=...)` call inline instead of calling
+  `play_reverie()`, because `play_reverie()` has no `after` parameter.
+  Ruff doesn't flag this as unused since the tests reference it. Fix:
+  add an optional `after` parameter to `play_reverie()` and have
+  `play_reverie_then_disconnect()` call it, removing the duplicated
+  `play()` call — do not merge `play_reverie()` with
+  `play_wind_chime()` (their guard/exception/return-type contracts
+  differ for good, caller-driven reasons: the wind chime fires inside
+  the live timer edit loop and must never raise, reverie playback
+  propagates errors to `play_reverie_then_disconnect()` by design).
+
+- **Add GitHub Actions CI + swap README badges from static to live.**
+  README currently carries static shields.io badges (python/pytest/
+  pyright/ruff/platform/version) hand-updated at time of writing —
+  they will silently drift as the suite grows. Trigger to act: (1) a
+  `.github/workflows/` CI file exists that actually runs
+  ruff format --check / ruff check / pytest / pyright on push, (2) it
+  has run at least once so a status exists to show, and (3) the repo
+  is public (or a shields.io GitHub token is wired up) — private repos
+  won't render a status badge without that. Until all three hold,
+  leave the badges static.
+
 ### Shelved
 
 - **Remove the "Time's up!" message 3 minutes after session completion.**

@@ -27,6 +27,6 @@ completed_at: 2026-09-30T08:08:39Z
 
 ## Working Notes
 
-- Project complete. Not done (need User approval): tag `v26Q3.0.0.0`, push to origin. Art uploaded by the User.
+- Project complete. Tag `v26Q3.0.0.0` and push to origin: User-approved and done (confirmed 2026-09-30; tracker note had not been updated to reflect it). Art uploaded by the User.
 - User smoke values remain uncommitted in app/constants.py (lines tagged `# smoke`).
 - `.claude/` left untracked (pre-existing state).
