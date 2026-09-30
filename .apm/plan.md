@@ -1,6 +1,6 @@
 ---
 title: TeaMode v26Q3.0.0.0
-modified: Plan creation by the Planner.
+modified: Added Task 2.5 (setup-flow refinements) per User decision after the Stage 2 smoke test; 3.1 now depends on 2.5; 4.2 guidance notes stripped Reflect embeds. Modified by the Manager.
 ---
 
 # APM Plan
@@ -18,7 +18,7 @@ modified: Plan creation by the Planner.
 | Stage | Name | Tasks | Groups |
 |---|---|---|---|
 | 1 | Foundation: Tooling, Package Split, Constants, Typing | 4 | Bot Engineer |
-| 2 | Core Reliability and Session Behavior | 4 | Bot Engineer |
+| 2 | Core Reliability and Session Behavior | 5 | Bot Engineer |
 | 3 | Embed Timer and Voice Channel Status | 2 | Bot Engineer |
 | 4 | Chained Sessions, Breaks and Channel Clear | 2 | Bot Engineer |
 | 5 | Extras: Stats, Teacup Banner, Art Assets | 3 | Bot Engineer, Asset Designer |
@@ -41,6 +41,7 @@ subgraph S2["Stage 2: Core Reliability"]
   T2_1["2.1 Startup Ops + Timezone<br/><i>Bot Engineer</i>"] --> T2_2["2.2 Rate Limit + Shared Start<br/><i>Bot Engineer</i>"]
   T2_2 --> T2_3["2.3 Expiry, Robustness, Stale Buttons<br/><i>Bot Engineer</i>"]
   T2_3 --> T2_4["2.4 Message Cleanup + Mentions<br/><i>Bot Engineer</i>"]
+  T2_4 --> T2_5["2.5 Setup-Flow Refinements<br/><i>Bot Engineer</i>"]
 end
 
 subgraph S3["Stage 3: Timer and Voice Status"]
@@ -66,7 +67,7 @@ subgraph S6["Stage 6: Docs"]
 end
 
 T1_4 --> T2_1
-T2_4 --> T3_1
+T2_5 --> T3_1
 T3_2 --> T4_1
 T2_1 --> T5_1
 T1_3 --> T5_2
@@ -83,6 +84,7 @@ style T2_1 fill:#95d5b2,color:#000
 style T2_2 fill:#95d5b2,color:#000
 style T2_3 fill:#95d5b2,color:#000
 style T2_4 fill:#95d5b2,color:#000
+style T2_5 fill:#95d5b2,color:#000
 style T3_1 fill:#95d5b2,color:#000
 style T3_2 fill:#95d5b2,color:#000
 style T4_1 fill:#95d5b2,color:#000
@@ -220,6 +222,20 @@ style T6_1 fill:#a8dadc,color:#000
 5. Write tests; run the full validation pipeline.
 6. Prepare the Stage 2 Discord smoke-test checklist and return Partial for User execution.
 
+### Task 2.5: Setup-Flow Refinements - Bot Engineer
+
+* **Objective:** Let the facilitator re-pick a duration until the intention is submitted, guard against double modal submits, and extend next-session cleanup to strip the previous Reflect embed and delete the previous ⛔ follow-up line.
+* **Output:** Timer-pick no longer disables the welcome buttons; intention submit disables them via the channel and refuses non-pending sessions; per-text-channel tracking of the last Reflect and ⛔ line IDs; cleanup at next session start; tests; smoke re-check.
+* **Validation:** Tests prove: a timer-pick leaves the welcome buttons enabled and a second pick re-records the duration and reopens the modal; intention submit edits the welcome via the channel with all duration buttons disabled (failure logged at WARNING, flow continues); a second submit for a non-pending session gets the ephemeral `MSG_SESSION_INACTIVE` and changes nothing (no second timer, no InvalidTransition); at next session start the previous Time's up and ⛔ line are deleted and the previous Reflect message is edited with its embed removed (content kept); failures logged at WARNING. Full pipeline passes. **User smoke re-check (Partial):** dismiss modal → re-pick → submit works and buttons grey out; ⛔ session then `/teamode` → Time's up and ⛔ line gone, Reflect keeps only its follow-up line and reactions.
+* **Guidance:** User decision after the Stage 2 smoke test. Spec §Session Flow Changes ("Duration re-pick") and §Messages and Cleanup ("Previous-session cleanup at next start"). Welcome message ID lives in `_SetupMessages`; the all-disabled view builder already exists (used by pending expiry). `set_intention` is synchronous and transitions PENDING → INTENTION_SET before any await, so a state check at the top of `on_submit` is a sufficient guard in asyncio. Reflect is posted in `_run_end_of_session`; the ⛔ line in `on_raw_reaction_add`. Remove the embed with `channel.get_partial_message(id).edit(embed=None)` (verify the correct discord.py 2.7.1 call). No new copy.
+* **Dependencies:** Task 2.4
+
+1. Stop disabling welcome buttons on timer pick; disable them on intention submit via the channel.
+2. Add the non-pending guard at the top of intention submit.
+3. Track last Reflect and ⛔ line IDs per text channel; at next session start strip the Reflect embed and delete the ⛔ line alongside Time's up.
+4. Write tests; run the full validation pipeline.
+5. Prepare the smoke re-check and return Partial.
+
 ## Stage 3: Embed Timer and Voice Channel Status
 
 ### Task 3.1: Embed Timer, Wrap-Up Phase and Nudge - Bot Engineer
@@ -228,7 +244,7 @@ style T6_1 fill:#a8dadc,color:#000
 * **Output:** `app/timer_format.py` (pure formatting); embed builder in `app/discord_bot/views.py`; tick handler updates; nudge trigger; tests.
 * **Validation:** Unit tests on `timer_format.py`: `MM:SS` formatting, progress bar at 0 %, 50 %, 100 % and rounding at non-integer ratios with width `PROGRESS_BAR_WIDTH`, phase switches exactly at `WRAP_UP_MINUTES` remaining for every duration including 5 min, HH:MM in a non-UTC timezone. Bot tests: initial send has embed plus `TIMER_CONTENT` with mentions; edits update both embed and content at the existing cadence; accent is matcha sage in Deep focus and oolong amber in Wrap up; Facilitator field reflects a handoff on the next edit; nudge `MSG_WRAP_UP_NUDGE` posts exactly once at the trigger for a 25-min session, never for 5/10-min sessions, never after the session is cancelled; solo-grace final state still shows the existing ended text. Full pipeline passes. **User smoke test (Partial):** view the embed on desktop and mobile, then with Discord "Show embeds and preview website links" off confirm the content line still shows the countdown; confirm nudge in a 25-min session (or temporarily lowered constant).
 * **Guidance:** Spec §Timer Presentation, §Session Flow Changes ("Wrap-up nudge", "Handoff interaction"), §Canonical Copy (Embed timer). Layout reference: `/home/jfang/WSL/github.com/jonathan-fang/dlqa/app/ui/widgets.py:173` (`FocusTimerWidget`: title → key/value fields → phase label → `MM:SS remaining` → progress bar with percentage) — read-only. UI-ADR embed formatting applies (`### ` prefix rule for content embeds — check `.project-meta/UI-ADR.md` and apply consistently or note why the timer is exempt). Colors come from the palette constants. The nudge hook belongs in the tick handler before the `% EDIT_INTERVAL_SECONDS` early return; re-check `registry.get(session_id).state == ACTIVE` at fire time; track "nudge sent" per session. Started-at uses `TEAMODE_TIMEZONE`. Discord embed field value limit is 1024 chars — truncate long intentions safely (intention max is 4000).
-* **Dependencies:** Task 2.4
+* **Dependencies:** Task 2.5
 
 1. Implement `app/timer_format.py` pure helpers.
 2. Build the timer embed and content in `views.py`; switch the initial send and edits to embed + content.
@@ -272,7 +288,7 @@ style T6_1 fill:#a8dadc,color:#000
 * **Objective:** Add `/teamode-clear` to delete past TeaMode clutter in a channel while keeping timers and active-session messages.
 * **Output:** `app/cleanup.py` (pure message classifiers); `/teamode-clear` command; tests; smoke checklist.
 * **Validation:** Unit tests on `cleanup.py` classify fixtures of every message type correctly: delete-eligible (welcome embed, Set Intention prompt, Time's up with Session-complete embed, Reflect, ⛔ follow-up line, wrap-up nudge, chaining prompt, break messages) vs kept (timer messages, handoff notices, non-bot messages, unrelated bot messages). Bot tests: invoker without Manage Messages gets `CLEAR_NO_PERMISSION`; scan uses `CLEAR_SCAN_LIMIT`; messages belonging to an active session or break are kept; response deferred ephemerally then `CLEAR_DONE` with the count, or `CLEAR_NOTHING`; individual delete failures are logged and skipped. Full pipeline passes. **User smoke test (Partial):** run it in a channel with several past sessions and confirm what remains.
-* **Guidance:** Spec §Commands (`/teamode-clear`) and §Canonical Copy. Classify by author (`message.author.id == client.user.id`) plus canonical copy / embed title matching against `app/constants.py` values (so edits to copy keep classification in sync — derive matchers from the constants, not duplicated literals). Timer messages are identifiable by the timer embed title pattern and must never match. Permission check: `interaction.permissions.manage_messages` (invoker's resolved channel permissions). Use `channel.history(limit=CLEAR_SCAN_LIMIT)` and delete one at a time (no `purge`/bulk delete, which needs Manage Messages for the bot); discord.py handles 429s. Defer with `ephemeral=True` before scanning. Register the command in the same tree as `/teamode`; command description from constants.
+* **Guidance:** Spec §Commands (`/teamode-clear`) and §Canonical Copy. Classify by author (`message.author.id == client.user.id`) plus canonical copy / embed title matching against `app/constants.py` values (so edits to copy keep classification in sync — derive matchers from the constants, not duplicated literals). Timer messages are identifiable by the timer embed title pattern and must never match. Reflect messages may have had their embed stripped at the next session start (content `[Follow-up] React with ✅…` remains) — classify both forms. Permission check: `interaction.permissions.manage_messages` (invoker's resolved channel permissions). Use `channel.history(limit=CLEAR_SCAN_LIMIT)` and delete one at a time (no `purge`/bulk delete, which needs Manage Messages for the bot); discord.py handles 429s. Defer with `ephemeral=True` before scanning. Register the command in the same tree as `/teamode`; command description from constants.
 * **Dependencies:** Task 4.1 (also relies on the nudge message from Task 3.1, reached through the chain)
 
 1. Implement classifiers in `app/cleanup.py` derived from constants.

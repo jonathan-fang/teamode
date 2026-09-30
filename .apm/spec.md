@@ -1,6 +1,6 @@
 ---
 title: TeaMode v26Q3.0.0.0
-modified: Spec creation by the Planner.
+modified: Setup-flow refinements (duration re-pick until intention submit, modal double-submit guard, Reflect embed strip and ⛔ line deletion at next session start) per User decision after the Stage 2 smoke test. Modified by the Manager.
 ---
 
 # APM Spec
@@ -108,6 +108,7 @@ Add `TEAMODE_TIMEZONE` to `.env.example` (stub value only).
 - **Pending-session expiry.** A session still `pending` after `PENDING_TIMEOUT_SECONDS` (duration never picked, or modal dismissed) is marked `cancelled`; the welcome message is edited to show the expired line with its buttons disabled; the voice status becomes the expired status. The expiry timer is cancelled when the session advances past `pending`.
   - Expiry is the one terminal path that does not auto-delete the welcome and Set Intention messages: the edited welcome remains as the visible record, and both are removable via `/teamode-clear`.
 - **Duration validation.** A timer-pick custom_id whose minutes value is not in `DURATIONS_MINUTES` is refused (stale-button refusal).
+- **Duration re-pick.** The welcome's duration buttons stay enabled while the session is `pending`; clicking one records the duration and opens the intention modal, and clicking again (e.g. after dismissing the modal) re-records the duration and reopens it — the latest pick wins. Submitting the intention modal disables the welcome's duration buttons (edited through the channel). Double-submit guard: a modal submission for a session that is no longer `pending` gets the ephemeral `MSG_SESSION_INACTIVE` refusal and changes nothing. The pending-expiry timer is cancelled on intention submit, not on duration pick.
 - **Wrap-up nudge** (`TODO.md` §Next Patch "Wrap-up nudge"): for sessions with `duration_minutes ≥ NUDGE_MIN_DURATION_MINUTES`, post one channel message when `WRAP_UP_MINUTES` minutes remain. Never fires if the session is no longer `active` (re-check state at fire time). Guard durations shorter than the trigger.
 - **Mentions in the timer message:** the initial timer send includes the same @-mention set as the Set Intention prompt (non-bot voice members, excluding the bot), snapshotted at modal submit. Edits do not re-ping.
 - **Handoff interaction:** embed Facilitator field reflects the current (in-memory) facilitator on the next edit. Voice status, nudge and wrap-up phase are unaffected. The DB keeps the original `facilitator_id`; `mark_handoff` writes only `handoff_facilitator_id` in SQLite.
@@ -150,7 +151,7 @@ Solo-grace cancellation keeps its existing text (`Session ended — facilitator 
 
 - **Send/delete rule:** any message that will later be edited or deleted is sent with `channel.send` (or its ID captured via `interaction.original_response()` / `followup.send(wait=True)`) and later edited/deleted through the channel (`channel.get_partial_message(id)`), never through the interaction webhook (tokens expire after 15 minutes). The bot can delete its own messages without Manage Messages.
 - **Automatic cleanup at terminal states:** when a session reaches `completed`, `followup_timeout`, or `cancelled` via solo grace or voice-connect failure, delete its welcome message and Set Intention prompt. Timer, Time's up and Reflect messages remain. Pending expiry is the exception: it edits the welcome instead (see Session Flow Changes).
-- **Previous Time's up deletion:** the last Time's up message ID per text channel is kept in memory; when a new session starts in that channel, that message is deleted. Lost on restart (accepted).
+- **Previous-session cleanup at next start:** the last session's Time's up message ID, Reflect message ID and ⛔ follow-up line ID (if posted) are kept in memory per text channel. When a new session starts in that channel: the Time's up message and the ⛔ follow-up line are deleted, and the Reflect message is edited to remove its embed (the `[Follow-up] React with ✅…` content and its reactions remain). Lost on restart (accepted).
 - **Deletion failures** (`NotFound`, `Forbidden`, `HTTPException`) are logged at WARNING and never break the session flow.
 
 ## Commands
@@ -174,7 +175,7 @@ Requires new read helpers in `app/db.py` (none exist today). Queries run on the 
 ### `/teamode-clear`
 
 - Invoker must have Manage Messages permission in the channel; otherwise ephemeral refusal.
-- Scans the last `CLEAR_SCAN_LIMIT` messages in the channel; deletes bot-authored messages that are: welcome embeds, Set Intention prompts, Time's up messages, Reflect/follow-up messages (including the ⛔ follow-up line), wrap-up nudges, chaining prompts, and break messages.
+- Scans the last `CLEAR_SCAN_LIMIT` messages in the channel; deletes bot-authored messages that are: welcome embeds, Set Intention prompts, Time's up messages, Reflect/follow-up messages (with or without their embed — the embed may already have been stripped; including the ⛔ follow-up line), wrap-up nudges, chaining prompts, and break messages.
 - Keeps: timer messages (they hold the facilitator intention), handoff notices, and every message belonging to a currently active session or break.
 - Deletes one at a time (no bulk delete, which would need Manage Messages for the bot); respects Discord rate limits (~5 deletes / 5 s per channel) via discord.py's built-in handling. Defers the interaction ephemerally and replies with the count when done.
 - Requires Read Message History (already needed for Reflect reactions).

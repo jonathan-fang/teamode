@@ -8,14 +8,14 @@ title: TeaMode v26Q3.0.0.0
 
 **Stage 1:** Complete
 
-**Stage 2:**
+**Stage 2:** Complete
+
+**Stage 3:**
 
 | Task | Status | Domain | Branch |
 |------|--------|--------|--------|
-| 2.1 | Active | bot-engineer | feat/startup-ops-and-rate-limits |
-| 2.2 | Active | bot-engineer | feat/startup-ops-and-rate-limits |
-| 2.3 | Waiting: 2.2 | bot-engineer | |
-| 2.4 | Waiting: 2.3 | bot-engineer | |
+| 3.1 | Active | bot-engineer | feat/embed-timer |
+| 3.2 | Waiting: 3.1 | bot-engineer | |
 
 ## Version Control
 
@@ -25,7 +25,8 @@ title: TeaMode v26Q3.0.0.0
 
 ## Working Notes
 
-- Planned batches remaining: 2.1+2.2 (active), 2.3+2.4, 3.1, 3.2, 4.1, 4.2, 5.1+5.2, 5.3, 6.1.
-- Stage 2 end (after 2.4): User Discord smoke pass — pending expiry, 4th-invocation rate limit, full 5-min session with cleanup + Time's up deletion, timer mentions, PID lock with a second instance.
-- 5.1 becomes Ready once 2.1 is Done; 5.2 already Ready (dep 1.3) — both held for slip priority (Stage 5).
+- Planned dispatches remaining: 3.1 (active, single — own smoke test), 3.2 (single — permission decision point), 4.1, 4.2, 5.1+5.2, 5.3, 6.1.
+- 3.1 prompt decisions to surface at smoke: phase/countdown/progress in embed description with `### ` prefix (UI-ADR content-embed rule); progress = elapsed fraction, floored; solo-grace final state = content text + frozen embed recolored muted red; mention line kept on content edits (consistent with 2.4).
+- 5.1 and 5.2 dependency-Ready, held for slip priority (Stage 5).
+- Test hygiene leftover: ~6 "coroutine never awaited" warnings (mocked create_task vs spawn_logged) — fold into 6.1 or TODO.md.
 - `.claude/` left untracked (pre-existing state).

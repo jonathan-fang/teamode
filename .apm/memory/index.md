@@ -13,6 +13,10 @@ title: TeaMode v26Q3.0.0.0
 - Test fakes for channels must be spec'd (`AsyncMock(spec=discord.TextChannel)` / `MagicMock(spec=discord.VoiceChannel)`) because production code now narrows with `isinstance`; unspec'd mocks silently fail narrowing. Interaction fakes must set `channel_id` explicitly.
 - All Discord copy and tunables live in `app/constants.py` (all canonical copy for later features already present, verbatim). Old private `_MSG_*` / `_*_SECONDS` names no longer exist; tests import from `app.constants`.
 - Rate limit decision: allowance 3 per 300 s window, 4th refused (User confirmed over TODO.md wording).
+- Discord smoke tests: shortest testable duration is 1 minute (`DURATIONS_MINUTES` must be ints — custom_id parsed with `int()`); lower `PENDING_TIMEOUT_SECONDS` for expiry checks. The User edits `app/constants.py` in place for smoke tests and may leave comments — commit those on request, run `ruff format` (inline comments need two spaces). Disabled Discord buttons cannot be clicked, so stale-button refusals are unit-test-only.
+- Key runtime helpers after Stage 2: `CommandsMixin._start_session(interaction)` (shared start: guards → rate limit → create session → previous-session cleanup → welcome); `spawn_logged(coro, name)` in `app/discord_bot/tasks.py` for every background task; async `LifecycleMixin._on_session_terminal(session_id, *, delete_setup_messages=True)` as the single terminal hook (extend it for voice status); `_SetupMessages` per session; `_ChannelCleanup` per text channel (Time's up, Reflect, ⛔ line); `_build_active_timer_content(...)` single timer-content builder; `_build_timer_view(session_id, *, disabled=False)`.
+- Session flow as shipped: duration buttons stay enabled while pending (re-pick allowed, latest wins); intention submit disables them and cancels pending expiry; modal double-submit refused with `MSG_SESSION_INACTIVE`. At next session start: previous Time's up and ⛔ line deleted, previous Reflect embed stripped (content kept). `/teamode-clear` must classify Reflect with or without embed.
+- Planning-doc accuracy: Manager-authored prompt details can contradict the Spec (pending-expiry cancel point) — cross-check Task Prompt instructions against Spec wording for state-machine behavior before dispatch.
 
 ## Stage Summaries
 
@@ -25,3 +29,14 @@ Stage 1 completed in two Bot Engineer batches, each on its own branch, both merg
 - task-01-02.log.md
 - task-01-03.log.md
 - task-01-04.log.md
+
+### Stage 2 - Core Reliability and Session Behavior
+
+Stage 2 grew from four to five Bot Engineer Tasks and landed in two merges. Batch 2.1+2.2 (merged after User approval) added `app/pidlock.py` with the single-instance lock wired before `init_db`, the verbatim ffmpeg WARNING probe, `TEAMODE_TIMEZONE` (`app.config`, falls back to Los Angeles then UTC), and pure `app/rate_limit.py` (per-user 3/300 s window checked before the per-guild 50/day cap at local midnight; refusals record nothing) behind the extracted `_start_session`. Batch 2.3+2.4 added pending expiry, the `spawn_logged` background-task wrapper, real 429 backoff gating (countdown-seconds based), a unified stale-button refusal, the centralized `_on_session_terminal` hook with welcome/Set Intention deletion, previous Time's up deletion, and one-time timer mentions (edits keep the line with `AllowedMentions.none()`). Review found the Manager's own prompt had told the Worker to cancel expiry on duration pick, contradicting the Spec and re-creating the lockout after a dismissed modal; the Manager fixed it directly (`b3583f3`). The User's Stage 2 smoke test passed (PID lock, expiry ×2, rate limit, full session, cleanup, previous Time's up) and prompted new decisions recorded in the Spec and as Task 2.5: re-pickable durations until intention submit with a double-submit guard, and next-start cleanup that deletes the ⛔ line and strips only the Reflect embed (`15b4a99`, `af0375e`). The User re-checked 2.5 in Discord and asked to commit their `app/constants.py` comments (`a762157`, formatted). Stage merged as `a0e5e27`; suite at 183 tests. Known leftover: ~6 harmless "coroutine never awaited" test warnings from mocked `create_task` since `spawn_logged` — candidate cleanup for the docs/TODO Task.
+
+**Task Logs:**
+- task-02-01.log.md
+- task-02-02.log.md
+- task-02-03.log.md
+- task-02-04.log.md
+- task-02-05.log.md
