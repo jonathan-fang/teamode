@@ -58,6 +58,10 @@ class CommandsMixin:
         # so pyright can check this mixin's own methods in isolation.
         def _arm_pending_expiry(self, session_id: int) -> None: ...
 
+        # Provided by BreakMixin — same reasoning.
+        async def _clear_chain_state(self, channel_id: int) -> None: ...
+        async def _cancel_break(self, channel_id: int) -> None: ...
+
     def _register_command(self) -> None:
         """Register /teamode and /handoff on the global command tree.
 
@@ -216,6 +220,13 @@ class CommandsMixin:
                         previous_cleanup.reflect_id,
                         interaction.channel.id,
                     )
+
+        # Clear any standing chain prompt (Go again / break offer) and
+        # cancel any in-progress break in this channel — a new session
+        # (this one) supersedes both. This also covers a "Go again" click,
+        # which reaches here via the same start path.
+        await self._clear_chain_state(interaction.channel.id)
+        await self._cancel_break(interaction.channel.id)
 
         # Build the welcome embed.
         embed = _build_welcome_embed()

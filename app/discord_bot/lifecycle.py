@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from typing import TYPE_CHECKING
 
 import discord
 
@@ -62,6 +63,13 @@ class LifecycleMixin:
     _pending_expiry_tasks: dict[int, asyncio.Task[None]]
     _setup_messages: dict[int, _SetupMessages]
     _channel_cleanup: dict[int, _ChannelCleanup]
+
+    if TYPE_CHECKING:
+        # Provided by BreakMixin — declared here, type-checking only, so
+        # pyright can check this mixin's own methods in isolation.
+        async def _post_chain_prompt(
+            self, session_id: int, text_channel_id: str
+        ) -> None: ...
 
     # ------------------------------------------------------------------
     # Voice channel status
@@ -440,6 +448,7 @@ class LifecycleMixin:
                 followup_note=None,
             )
             await self._on_session_terminal(session_id)
+            await self._post_chain_prompt(session_id, session.text_channel_id)
         else:
             # ⛔ — record incomplete, then post the "why" prompt.
             self._registry.mark_completed(
@@ -466,6 +475,8 @@ class LifecycleMixin:
                     session.text_channel_id,
                     session_id,
                 )
+            # Chain prompt follows the "why" line, per every path above.
+            await self._post_chain_prompt(session_id, session.text_channel_id)
 
     async def on_voice_state_update(
         self,
