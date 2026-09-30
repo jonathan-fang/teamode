@@ -33,9 +33,16 @@ conventions.
 
 **Classes:** `PascalCase`. Mixins: suffix `Mixin`.
 
-**Files/modules:** `snake_case`. Entry point is thin
-(`teamode.py`); business logic lives in a separate package
-(`teamode/` with `bot.py`, `session.py`, `db.py`, `voice.py`).
+**Files/modules:** `snake_case`. Entry point is thin (`teamode.py`);
+business logic lives in the `app/` package. Discord-free logic
+(formatting, rate limiting, stats aggregation, message classification,
+session state) lives in flat modules directly under `app/` with no
+`discord` imports and injectable clocks, so it stays unit testable.
+`app/discord_bot/` holds only Discord wiring: commands, views, event
+handlers, timer and lifecycle orchestration — built as mixins
+(`CommandsMixin`, `ViewsMixin`, `TimerMixin`, `LifecycleMixin`,
+`BreakMixin`, `ClearMixin`, `StatsMixin`) composed onto the bot class
+in `client.py`.
 
 **Branches:** `type/short-description` — `feat/follow-up-buttons`,
 `fix/voice-reconnect`, `refactor/session-state`.
@@ -68,6 +75,33 @@ bottleneck, revisit then.
 **Voice handling:** All voice connection logic lives in `voice.py`. Bot
 join/leave, audio playback, reconnect retry — single source of truth.
 
+**Constants own all copy and tunables:** every tunable number
+(durations, timeouts, limits, intervals, scan depths, widths) and
+every string Ocha sends to Discord (messages, embed titles/fields,
+button labels, slash-command descriptions, voice channel statuses)
+lives in `app/constants.py` as a named constant, using `str.format`
+placeholders for variable parts. Palette hex values live there too.
+Never inline these in other modules. `app/constants.py` must not
+import `discord` or `app.config` (or anything from `app.discord_bot`)
+— it stays pure data, readable and testable in isolation.
+
+**Channel-send rule:** any message that will later be edited or
+deleted must be sent with `channel.send`, or have its id captured
+(`interaction.original_response()`, `followup.send(..., wait=True)`),
+and must be edited/deleted through the channel
+(`channel.get_partial_message(id)`) — never through the interaction
+webhook. Interaction tokens expire after 15 minutes and sessions
+outlast that. Discord edit/delete/status calls that fail (`NotFound`,
+`Forbidden`, `HTTPException`) are logged at WARNING and must not break
+the session flow.
+
+**Pace loops of Discord API calls proactively.** When a loop issues
+several Discord API calls in sequence (e.g. `/teamode-clear` deleting
+many messages), space them out with an explicit interval constant
+rather than leaning on 429 retries to keep you under the rate limit —
+a retry-driven approach wastes calls and risks cascading backoff under
+load that a fixed pace avoids entirely.
+
 **Layered escalation (Discord features):**
 1. Direct discord.py call — first choice.
 2. Raw HTTP via `discord.http` — only when discord.py doesn't expose a
@@ -79,11 +113,23 @@ join/leave, audio playback, reconnect retry — single source of truth.
 ## Python Style
 
 - 4-space indentation. Follow the file you're in.
-- Type-annotate new functions. `pyright` is a hard gate — zero errors
-  before committing.
-- No `# type: ignore` shortcuts. Narrow with `isinstance` guards
-  instead.
-- No `cast()` unless truly unavoidable.
+- **Type hints are mandatory, not just encouraged.** Every function in
+  `app/` and `teamode.py` is annotated on both its parameters and its
+  return type — Ruff's `ANN` rule set (configured in `pyproject.toml`)
+  enforces this and is a hard lint failure otherwise. `tests/` is
+  exempt. Annotate a local variable only when it adds information a
+  reader couldn't otherwise infer — a value that can be missing or
+  have more than one type, or a non-obvious container shape. Let
+  tooling infer the rest.
+- `pyright` is a hard gate — zero errors before committing (run bare,
+  no flags — configuration lives in `pyproject.toml`).
+- **`cast()` and `# type: ignore` are banned**, with one narrow escape
+  hatch: a genuine bug in an upstream type stub. In that case (and
+  only that case) use `# type: ignore[<specific-code>]` with a
+  one-line comment explaining why, and call it out explicitly in the
+  PR/completion report. Otherwise narrow with `isinstance`, explicit
+  `None` checks, or a more precise API (e.g. `interaction.channel_id`
+  instead of a broad `Interaction.channel`).
 - `ruff format` + `ruff check` clean before every commit.
 
 ---
