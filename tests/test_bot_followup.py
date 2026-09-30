@@ -625,16 +625,19 @@ async def test_watchdog_fires_marks_followup_timeout(
 
 
 # ---------------------------------------------------------------------------
-# Timer-pick auto-disable
+# Timer-pick leaves the welcome buttons enabled — re-pick until intention
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_timer_pick_disables_buttons(
+async def test_timer_pick_leaves_buttons_enabled(
     bot: TeaModeBot,
     registry: SessionRegistry,
 ) -> None:
-    """After a timer-pick click, the three timer buttons are disabled."""
+    """A timer-pick click records the duration and opens the modal without
+    touching (disabling) the welcome message's buttons — the facilitator may
+    dismiss the modal and re-pick a duration; the buttons stay live until the
+    intention is actually submitted (see IntentionModal.on_submit)."""
     session = registry.create_pending_session(
         guild_id="222",
         text_channel_id="333",
@@ -643,30 +646,7 @@ async def test_timer_pick_disables_buttons(
     )
     sid = session.session_id
 
-    # Build three enabled Button objects for the fake view.
-    btn_10: discord.ui.Button[discord.ui.View] = discord.ui.Button(
-        label="10 min",
-        custom_id=f"teamode:{sid}:timer:10",
-        style=discord.ButtonStyle.secondary,
-    )
-    btn_25: discord.ui.Button[discord.ui.View] = discord.ui.Button(
-        label="25 min",
-        custom_id=f"teamode:{sid}:timer:25",
-        style=discord.ButtonStyle.secondary,
-    )
-    btn_50: discord.ui.Button[discord.ui.View] = discord.ui.Button(
-        label="50 min",
-        custom_id=f"teamode:{sid}:timer:50",
-        style=discord.ButtonStyle.secondary,
-    )
-
-    fake_view = discord.ui.View()
-    fake_view.add_item(btn_10)
-    fake_view.add_item(btn_25)
-    fake_view.add_item(btn_50)
-
     fake_message = AsyncMock(spec=discord.Message)
-    fake_message.edit = AsyncMock()
 
     inter = AsyncMock()
     inter.type = discord.InteractionType.component
@@ -682,15 +662,54 @@ async def test_timer_pick_disables_buttons(
 
     inter.response = AsyncMock()
 
-    with patch(
-        "app.discord_bot.views.discord.ui.View.from_message", return_value=fake_view
-    ):
-        await bot.on_interaction(inter)
+    await bot.on_interaction(inter)
 
-    # All buttons are now disabled.
-    for child in fake_view.children:
-        assert isinstance(child, discord.ui.Button)
-        assert child.disabled is True
+    # The welcome message is never edited on a timer pick.
+    fake_message.edit.assert_not_called()
 
-    # message.edit was awaited.
-    fake_message.edit.assert_awaited_once()
+    # The duration was recorded and the modal was opened.
+    session_after = registry.get(sid)
+    assert session_after is not None
+    assert session_after.duration_minutes == 25
+    inter.response.send_modal.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_second_timer_pick_re_records_duration(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """A second timer-pick click for the same still-PENDING session (e.g.
+    after the facilitator dismissed the first modal) re-records the new
+    duration and opens a fresh modal — the latest pick wins."""
+    session = registry.create_pending_session(
+        guild_id="222",
+        text_channel_id="333",
+        voice_channel_id="444",
+        facilitator_id="111",
+    )
+    sid = session.session_id
+
+    def _make_inter(duration: int) -> Any:
+        inter = AsyncMock()
+        inter.type = discord.InteractionType.component
+        inter.data = {"custom_id": f"teamode:{sid}:timer:{duration}"}
+        user = MagicMock()
+        user.id = 111
+        inter.user = user
+        inter.channel = MagicMock(spec=discord.VoiceChannel)
+        inter.message = AsyncMock(spec=discord.Message)
+        inter.response = AsyncMock()
+        return inter
+
+    first = _make_inter(10)
+    await bot.on_interaction(first)
+    assert registry.get(sid) is not None
+    assert registry.get(sid).duration_minutes == 10  # type: ignore[union-attr]
+    first.response.send_modal.assert_called_once()
+
+    second = _make_inter(50)
+    await bot.on_interaction(second)
+    assert registry.get(sid) is not None
+    assert registry.get(sid).duration_minutes == 50  # type: ignore[union-attr]
+    second.response.send_modal.assert_called_once()

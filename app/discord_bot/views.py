@@ -134,6 +134,24 @@ class _SetupMessages:
     intention_message_id: int | None = None
 
 
+@dataclass
+class _ChannelCleanup:
+    """Message ids from the most recently finished session in a text
+    channel, kept so the *next* ``/teamode`` invocation in that channel can
+    clean them up.
+
+    ``times_up_id`` is the "Time's up" message, ``reflect_id`` is the
+    Reflect (facilitator follow-up prompt) message, and ``why_id`` is the
+    "share what got in the way" line posted only when the facilitator
+    answered ⛔. In-memory only — lost on restart (accepted), like the
+    dict it replaces.
+    """
+
+    times_up_id: int | None = None
+    reflect_id: int | None = None
+    why_id: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # Structural bot shape needed by IntentionModal
 # ---------------------------------------------------------------------------
@@ -157,6 +175,7 @@ class _ModalBot(Protocol):
     _edit_states: dict[int, _EditState]
     _countdown_tasks: dict[int, asyncio.Task[None]]
     _pending_expiry_tasks: dict[int, asyncio.Task[None]]
+    _setup_messages: dict[int, _SetupMessages]
 
     async def _on_countdown_tick(
         self, session_id: int, seconds_remaining: int
@@ -216,6 +235,16 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         self._voice_channel = voice_channel
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        # Double-submit guard: the session must still be PENDING. Because
+        # `set_intention` is synchronous and transitions the session before
+        # any `await`, a check here — before that call — is sufficient under
+        # asyncio's single-threaded cooperative scheduling: no other submit
+        # can interleave between this check and the transition below.
+        session_check = self._bot._registry.get(self._session_id)
+        if not _session_actionable(session_check, expect=SessionState.PENDING):
+            await _send_refusal(interaction, MSG_SESSION_INACTIVE)
+            return
+
         component = self.intention_field.component
         if not isinstance(component, discord.ui.TextInput):
             # Genuinely impossible given the class-level declaration above,
@@ -238,6 +267,25 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             expiry_task.cancel()
         # Acknowledge the modal interaction without cluttering the channel.
         await interaction.response.defer(ephemeral=True)
+
+        # Disable the welcome message's duration buttons now that the
+        # intention has been submitted — re-picking a duration no longer
+        # makes sense past this point. Edited through the channel (the
+        # welcome lives in the voice channel's text chat), never through the
+        # interaction webhook. Best-effort: a failure here must not block
+        # voice connect / session activation below.
+        setup = self._bot._setup_messages.get(self._session_id)
+        if setup is not None:
+            try:
+                await self._voice_channel.get_partial_message(
+                    setup.welcome_message_id
+                ).edit(view=_build_timer_view(self._session_id, disabled=True))
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.warning(
+                    "Failed to disable welcome buttons on intention submit"
+                    " for session %s",
+                    self._session_id,
+                )
 
         # --- Connect voice ---
         # Use the channel resolved at click-handler time — no REST round-trip.
@@ -339,6 +387,7 @@ class ViewsMixin:
     _edit_states: dict[int, _EditState]
     _countdown_tasks: dict[int, asyncio.Task[None]]
     _pending_expiry_tasks: dict[int, asyncio.Task[None]]
+    _setup_messages: dict[int, _SetupMessages]
 
     if TYPE_CHECKING:
         # Methods provided by TimerMixin / LifecycleMixin at runtime — declared
@@ -398,17 +447,12 @@ class ViewsMixin:
 
         # The pending-expiry watchdog stays armed: the session is still
         # PENDING until the intention modal is submitted, and a dismissed
-        # modal (with the duration buttons now disabled) must still expire.
+        # modal (with the duration buttons still enabled) must still expire.
 
-        # Disable the timer-pick buttons so a second click is impossible.
-        # Must be done before opening the modal (responding to the interaction
-        # with a modal consumes the response slot).
-        assert interaction.message is not None
-        view = discord.ui.View.from_message(interaction.message)
-        for child in view.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-        await interaction.message.edit(view=view)
+        # The welcome's duration buttons stay enabled here — the facilitator
+        # may dismiss the modal and re-pick a duration; the latest pick wins
+        # (set_duration overwrites). Buttons are disabled once the intention
+        # is actually submitted (see IntentionModal.on_submit).
 
         # interaction.channel is guaranteed to be a VoiceChannel here — the
         # /teamode invocation guard (Guard 1 in _handle_teamode) already
