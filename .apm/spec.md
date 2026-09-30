@@ -1,6 +1,6 @@
 ---
 title: TeaMode v26Q3.0.0.0
-modified: Setup-flow refinements (duration re-pick until intention submit, modal double-submit guard, Reflect embed strip and ⛔ line deletion at next session start) per User decision after the Stage 2 smoke test. Modified by the Manager.
+modified: Stage 3 wrap-up refinements per User decision after the embed-timer smoke test (nudge threshold 10 min, singular/plural nudge copy, wind-chime audio with the nudge, nudge message deleted at terminal cleanup, content line gains 'remaining'). Modified by the Manager.
 ---
 
 # APM Spec
@@ -74,7 +74,7 @@ The split preserves all existing runtime behavior. The module list may be adjust
 | `RATE_LIMIT_ALLOWANCE` | `3` | Invocations allowed per window; the 4th is refused. |
 | `GUILD_DAILY_CAP` | `50` | Per-guild invocations per day. |
 | `WRAP_UP_MINUTES` | `3` | Embed Wrap up phase + nudge trigger. |
-| `NUDGE_MIN_DURATION_MINUTES` | `20` | Nudge only for sessions ≥ this. |
+| `NUDGE_MIN_DURATION_MINUTES` | `10` | Nudge only for sessions ≥ this (User changed from 20 after the embed-timer smoke test). |
 | `PENDING_TIMEOUT_SECONDS` | `600` | Unstarted-session expiry. |
 | `BREAK_MINUTES` | `5` | Break length. |
 | `GO_AGAIN_TIMEOUT_SECONDS` | `180` | Post-break Go again button lifetime. |
@@ -97,7 +97,7 @@ The split preserves all existing runtime behavior. The module list may be adjust
 | `DISCORD_BOT_TOKEN` | required | Unchanged. Never logged except redacted to last four. |
 | `TEAMODE_DB_PATH` | `./sessions.db` | Unchanged. |
 | `TEAMODE_DEV_GUILD_ID` | unset | Unchanged behavior (comma-separated guild IDs; if unset, command registration is skipped with a warning). Must be documented in README. |
-| `TEAMODE_TIMEZONE` | `DEFAULT_TIMEZONE` | New. IANA name, parsed with stdlib `zoneinfo`. Used for voice status HH:MM, embed "Started at", daily cap midnight reset, and streak day boundaries. Invalid value → log WARNING and fall back to default. |
+| `TEAMODE_TIMEZONE` | `DEFAULT_TIMEZONE` | New. IANA name, parsed with stdlib `zoneinfo`. Used for voice status HH:MM, embed "Range" field, daily cap midnight reset, and streak day boundaries. Invalid value → log WARNING and fall back to default. |
 
 Add `TEAMODE_TIMEZONE` to `.env.example` (stub value only).
 
@@ -109,7 +109,7 @@ Add `TEAMODE_TIMEZONE` to `.env.example` (stub value only).
   - Expiry is the one terminal path that does not auto-delete the welcome and Set Intention messages: the edited welcome remains as the visible record, and both are removable via `/teamode-clear`.
 - **Duration validation.** A timer-pick custom_id whose minutes value is not in `DURATIONS_MINUTES` is refused (stale-button refusal).
 - **Duration re-pick.** The welcome's duration buttons stay enabled while the session is `pending`; clicking one records the duration and opens the intention modal, and clicking again (e.g. after dismissing the modal) re-records the duration and reopens it — the latest pick wins. Submitting the intention modal disables the welcome's duration buttons (edited through the channel). Double-submit guard: a modal submission for a session that is no longer `pending` gets the ephemeral `MSG_SESSION_INACTIVE` refusal and changes nothing. The pending-expiry timer is cancelled on intention submit, not on duration pick.
-- **Wrap-up nudge** (`TODO.md` §Next Patch "Wrap-up nudge"): for sessions with `duration_minutes ≥ NUDGE_MIN_DURATION_MINUTES`, post one channel message when `WRAP_UP_MINUTES` minutes remain. Never fires if the session is no longer `active` (re-check state at fire time). Guard durations shorter than the trigger.
+- **Wrap-up nudge** (`TODO.md` §Next Patch "Wrap-up nudge"): for sessions with `duration_minutes ≥ NUDGE_MIN_DURATION_MINUTES`, post one channel message when `WRAP_UP_MINUTES` minutes remain — `MSG_WRAP_UP_NUDGE_ONE` when that is 1 minute, otherwise `MSG_WRAP_UP_NUDGE` with the minute count — and at the same moment play `assets/wind-chime.wav` once on the session's voice connection (no disconnect; skipped with a WARNING if not connected, already playing, or playback fails). Never fires if the session is no longer `active` (re-check state at fire time). Guard durations shorter than the trigger.
 - **Mentions in the timer message:** the initial timer send includes the same @-mention set as the Set Intention prompt (non-bot voice members, excluding the bot), snapshotted at modal submit. Edits do not re-ping.
 - **Handoff interaction:** embed Facilitator field reflects the current (in-memory) facilitator on the next edit. Voice status, nudge and wrap-up phase are unaffected. The DB keeps the original `facilitator_id`; `mark_handoff` writes only `handoff_facilitator_id` in SQLite.
 
@@ -122,13 +122,13 @@ Embed layout (modeled on `FocusTimerWidget`: title → fields → phase label �
 | Element | Content |
 |---|---|
 | Title | `TIMER_EMBED_TITLE` (see Copy) |
-| Fields | Intention, Facilitator, Started at (HH:MM in `TEAMODE_TIMEZONE`) |
+| Fields | Intention, Facilitator, Range (`HH:MM to HH:MM` start–end in `TEAMODE_TIMEZONE`; `TIMER_FIELD_RANGE`, `TIMER_TIME_RANGE`) |
 | Phase | Deep focus until the last `WRAP_UP_MINUTES` minutes, then Wrap up (all durations) |
 | Countdown | `{MM:SS} remaining` |
 | Progress | Unicode bar of `PROGRESS_BAR_WIDTH` chars + percentage, e.g. `█████░░░░░ 50%` |
 | Accent | Matcha sage `#7B9D6F`; oolong amber `#C97B53` during Wrap up |
 
-Content line: `⏳ {MM:SS}` with the @-mentions on the following line (mentions present on the initial send; edits keep the same content text).
+Content line: `⏳ {MM:SS} remaining` with the @-mentions on the following line (mentions ping on the initial send; edits keep the line with pings suppressed).
 
 Existing plain-text `_ACTIVE_TIMER_FMT` path is replaced by this message (the plain countdown survives as the content line). UI-ADR's "Embed + unicode progress bar is v2 polish — do not preempt" is superseded and must be updated.
 
@@ -150,7 +150,7 @@ Solo-grace cancellation keeps its existing text (`Session ended — facilitator 
 ## Messages and Cleanup
 
 - **Send/delete rule:** any message that will later be edited or deleted is sent with `channel.send` (or its ID captured via `interaction.original_response()` / `followup.send(wait=True)`) and later edited/deleted through the channel (`channel.get_partial_message(id)`), never through the interaction webhook (tokens expire after 15 minutes). The bot can delete its own messages without Manage Messages.
-- **Automatic cleanup at terminal states:** when a session reaches `completed`, `followup_timeout`, or `cancelled` via solo grace or voice-connect failure, delete its welcome message and Set Intention prompt. Timer, Time's up and Reflect messages remain. Pending expiry is the exception: it edits the welcome instead (see Session Flow Changes).
+- **Automatic cleanup at terminal states:** when a session reaches `completed`, `followup_timeout`, or `cancelled` via solo grace or voice-connect failure, delete its welcome message, Set Intention prompt and wrap-up nudge (if one was posted). Timer, Time's up and Reflect messages remain. Pending expiry is the exception: it edits the welcome instead (see Session Flow Changes).
 - **Previous-session cleanup at next start:** the last session's Time's up message ID, Reflect message ID and ⛔ follow-up line ID (if posted) are kept in memory per text channel. When a new session starts in that channel: the Time's up message and the ⛔ follow-up line are deleted, and the Reflect message is edited to remove its embed (the `[Follow-up] React with ✅…` content and its reactions remain). Lost on restart (accepted).
 - **Deletion failures** (`NotFound`, `Forbidden`, `HTTPException`) are logged at WARNING and never break the session flow.
 
@@ -240,7 +240,7 @@ Stored in `app/constants.py` as `TEACUP_BANNER`.
 
 | Document | Changes |
 |---|---|
-| `README.md` | New commands (`/teamode-stats`, `/teamode-clear`), chained sessions/breaks, env vars (`TEAMODE_DEV_GUILD_ID`, `TEAMODE_TIMEZONE`), full permission list and invite integer per Voice Channel Status §"Required bot permissions" (plus Manage Messages note for `/teamode-clear` invokers and how to add Set Voice Channel Status to an existing bot role), ffmpeg install line in Requirements, correct guild-sync behavior (unset `TEAMODE_DEV_GUILD_ID` skips registration), session diagram matching real copy. |
+| `README.md` | Sound credits section: `assets/wind-chime.wav` — "Wind Chime" by GnoteSoundz, CC0 1.0; `assets/reverie.wav` — by Seemant Chandra (Instagram: piyush.x_x). Do not link or mention the source project. New commands (`/teamode-stats`, `/teamode-clear`), chained sessions/breaks, env vars (`TEAMODE_DEV_GUILD_ID`, `TEAMODE_TIMEZONE`), full permission list and invite integer per Voice Channel Status §"Required bot permissions" (plus Manage Messages note for `/teamode-clear` invokers and how to add Set Voice Channel Status to an existing bot role), ffmpeg install line in Requirements, correct guild-sync behavior (unset `TEAMODE_DEV_GUILD_ID` skips registration), session diagram matching real copy. |
 | `.project-meta/UI-ADR.md` | Canonical copy below; embed timer spec; chaining/break surfaces; supersede "do not preempt" note; resolve "Pending UI decisions"; teacup AI-art exception; note that copy lives in `app/constants.py`. |
 | `docs/sqlite-schema.md` | Correct timestamp format (`+00:00`, not `Z`); document read helpers used by stats. |
 | `.project-meta/conventions.md` | Type-hint rule; `cast`/ignore escape hatch; copy and tunables live in `app/constants.py`; package layout; channel-send rule. |
@@ -271,12 +271,12 @@ All strings below are User-approved and must be used verbatim (placeholders in `
 | Key | Text |
 |---|---|
 | `TIMER_EMBED_TITLE` | `🍵 TeaMode • {duration} min session` |
-| Field names | `Intention`, `Facilitator`, `Started at` |
+| Field names | `Intention`, `Facilitator`, `Range` (value `{start} to {end}`) |
 | `PHASE_DEEP_FOCUS` | `Deep focus` |
 | `PHASE_WRAP_UP` | `Wrap up — finish your current task` |
 | `TIMER_REMAINING` | `{mmss} remaining` |
 | Progress line | `{bar} {percent}%` (e.g. `█████░░░░░ 50%`) |
-| `TIMER_CONTENT` | `⏳ {mmss}` (mentions on the next line on initial send) |
+| `TIMER_CONTENT` | `⏳ {mmss} remaining` (mentions on the next line) |
 | Solo-grace final | `Session ended — facilitator did not return.` (existing) |
 
 ### Chaining and breaks
@@ -297,7 +297,8 @@ All strings below are User-approved and must be used verbatim (placeholders in `
 |---|---|
 | `MSG_RATE_LIMIT_USER` | `Per-user rate limit — try again in {seconds} seconds.` |
 | `MSG_RATE_LIMIT_GUILD` | `Daily server limit reached ({cap} sessions per day) — resets at midnight.` |
-| `MSG_WRAP_UP_NUDGE` | `⏰ Wrap-up nudge — {minutes} minutes left.` |
+| `MSG_WRAP_UP_NUDGE` | `⏰ Wrap-up nudge — {minutes} minutes left.` (2+ minutes) |
+| `MSG_WRAP_UP_NUDGE_ONE` | `⏰ Wrap-up nudge — 1 minute left.` |
 | `MSG_PENDING_EXPIRED` | `🍵 Expired` (edited onto the welcome; buttons disabled) |
 | `MSG_SESSION_INACTIVE` | `This session is no longer active.` (existing; used for all stale buttons) |
 

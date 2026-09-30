@@ -1,6 +1,6 @@
 ---
 title: TeaMode v26Q3.0.0.0
-modified: Added Task 2.5 (setup-flow refinements) per User decision after the Stage 2 smoke test; 3.1 now depends on 2.5; 4.2 guidance notes stripped Reflect embeds. Modified by the Manager.
+modified: Added Task 3.3 (wrap-up refinements) per User decision after the embed-timer smoke test; 3.2 now depends on 3.3. Earlier: Task 2.5 added. Modified by the Manager.
 ---
 
 # APM Plan
@@ -19,7 +19,7 @@ modified: Added Task 2.5 (setup-flow refinements) per User decision after the St
 |---|---|---|---|
 | 1 | Foundation: Tooling, Package Split, Constants, Typing | 4 | Bot Engineer |
 | 2 | Core Reliability and Session Behavior | 5 | Bot Engineer |
-| 3 | Embed Timer and Voice Channel Status | 2 | Bot Engineer |
+| 3 | Embed Timer and Voice Channel Status | 3 | Bot Engineer |
 | 4 | Chained Sessions, Breaks and Channel Clear | 2 | Bot Engineer |
 | 5 | Extras: Stats, Teacup Banner, Art Assets | 3 | Bot Engineer, Asset Designer |
 | 6 | Documentation and Release Prep | 1 | Docs Writer |
@@ -46,7 +46,8 @@ end
 
 subgraph S3["Stage 3: Timer and Voice Status"]
   direction LR
-  T3_1["3.1 Embed Timer + Nudge<br/><i>Bot Engineer</i>"] --> T3_2["3.2 Voice Channel Status<br/><i>Bot Engineer</i>"]
+  T3_1["3.1 Embed Timer + Nudge<br/><i>Bot Engineer</i>"] --> T3_3["3.3 Wrap-Up Refinements<br/><i>Bot Engineer</i>"]
+  T3_3 --> T3_2["3.2 Voice Channel Status<br/><i>Bot Engineer</i>"]
 end
 
 subgraph S4["Stage 4: Chaining and Clear"]
@@ -87,6 +88,7 @@ style T2_4 fill:#95d5b2,color:#000
 style T2_5 fill:#95d5b2,color:#000
 style T3_1 fill:#95d5b2,color:#000
 style T3_2 fill:#95d5b2,color:#000
+style T3_3 fill:#95d5b2,color:#000
 style T4_1 fill:#95d5b2,color:#000
 style T4_2 fill:#95d5b2,color:#000
 style T5_1 fill:#95d5b2,color:#000
@@ -253,13 +255,26 @@ style T6_1 fill:#a8dadc,color:#000
 5. Write tests; run the full validation pipeline.
 6. Prepare the smoke-test checklist and return Partial.
 
+### Task 3.3: Wrap-Up Refinements - Bot Engineer
+
+* **Objective:** Pluralize the nudge correctly, play a wind chime in voice with the nudge, delete the nudge at terminal cleanup, and append "remaining" to the content line.
+* **Output:** `MSG_WRAP_UP_NUDGE_ONE` and updated `TIMER_CONTENT` in constants; nudge text selection; `assets/wind-chime.wav` + a voice helper playing it without disconnecting; nudge message ID tracked per session and deleted with the welcome/Set Intention; tests; smoke re-check.
+* **Validation:** Tests prove: nudge text is `MSG_WRAP_UP_NUDGE_ONE` when `WRAP_UP_MINUTES == 1` and `MSG_WRAP_UP_NUDGE` with the count otherwise; the chime plays once via mocked `voice_client.play` at the nudge (never when no nudge fires), is skipped with WARNING when not connected / already playing / play raises, and never disconnects; the nudge message is deleted at every non-expiry terminal path that deletes the welcome (failures WARNING); content line reads `⏳ MM:SS remaining` on send and edits. Full pipeline passes. **User smoke re-check (Partial).**
+* **Guidance:** User decisions after the 3.1 smoke test (Spec §Session Flow Changes "Wrap-up nudge", §Timer Presentation content line, §Messages and Cleanup). Chime path constant lives in `app/voice.py` next to `REVERIE_PATH` (conventions: asset paths in the voice module). Voice client per session is in `self._voice_clients`. Store the nudge message ID on `_SetupMessages` so `_on_session_terminal` deletes it with the others. No other new copy.
+* **Dependencies:** Task 3.1
+
+1. Add the singular nudge constant and select text by minute count; update `TIMER_CONTENT`.
+2. Add the chime asset path and a play-without-disconnect helper; call it at the nudge.
+3. Track the nudge message ID and delete it in terminal cleanup.
+4. Write tests; run the full validation pipeline; return Partial for the re-check.
+
 ### Task 3.2: Voice Channel Status - Bot Engineer
 
 * **Objective:** Set the voice channel status at each session moment and reset crashed sessions' statuses at startup.
 * **Output:** Status updates across the lifecycle; `reconcile_crashed_sessions` exposing affected voice channel IDs; startup reset after gateway ready; tests; smoke checklist including the permission check.
 * **Validation:** Tests (with `AsyncMock` `VoiceChannel.edit`) prove each moment sets the right canonical constant — Starting on launch, Timer with end HH:MM after `mark_active`, Finished with HH:MM at follow-up, Cancelled / Expired on the matching terminal paths, Break reserved for Task 4.1 — using `TEAMODE_TIMEZONE`; `Forbidden`/`HTTPException` is logged at WARNING and the session continues; startup marks crashed rows and then sets Crashed on those voice channels once ready; existing reconciliation tests still pass (update for the new return shape). Full pipeline passes. **User smoke test (Partial, decision point):** after the User grants Set Voice Channel Status to the bot role, run a session and confirm each status appears; explicitly check whether Starting (bot not yet in voice) and Finished (after disconnect) succeed. If they fail with Forbidden, report which and stop for the User's decision: grant Manage Channels on the voice channels, or restrict status updates to while-connected.
 * **Guidance:** Spec §Voice Channel Status (moments, permission risk, required permissions) and §Reliability and Operations (restarts). Use `voice_channel.edit(status=...)`; discord.py routes status-only edits to `PUT /channels/{id}/voice-status`. Resolved `VoiceChannel` objects: the modal holds `self._voice_channel`; the end-of-session path has `voice_client.channel`; for launch, the invoking interaction's channel is the voice channel (guarded). Startup ordering stays `init_db → reconcile → gateway`: return the voice channel IDs from reconcile (or add a sibling read) and apply statuses in `on_ready` via `client.get_channel`, guarding `isinstance(..., discord.VoiceChannel)`. Centralize status setting in one helper to keep Task 4.1's Break status simple. The `🍵 Crashed` status is set for sessions reconciled this startup only.
-* **Dependencies:** Task 3.1
+* **Dependencies:** Task 3.3 (Task 3.1 through the chain)
 
 1. Add a status helper that formats the canonical constant and logs failures.
 2. Call it at launch, activation, follow-up, and each cancelled/expired terminal path.
