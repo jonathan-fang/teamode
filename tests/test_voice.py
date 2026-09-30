@@ -8,10 +8,12 @@ import pytest
 
 from app.voice import (
     REVERIE_PATH,
+    WIND_CHIME_PATH,
     connect,
     disconnect,
     play_reverie,
     play_reverie_then_disconnect,
+    play_wind_chime,
 )
 
 
@@ -84,6 +86,73 @@ def test_play_reverie_propagates_exception() -> None:
     with patch("app.voice.discord.FFmpegPCMAudio"):
         with pytest.raises(RuntimeError, match="play failed"):
             play_reverie(fake_client)
+
+
+# ---------------------------------------------------------------------------
+# play_wind_chime
+# ---------------------------------------------------------------------------
+
+
+def test_play_wind_chime_plays_once_and_does_not_disconnect() -> None:
+    """A connected, idle voice client plays the chime exactly once and is
+    never disconnected."""
+    fake_client = MagicMock(spec=discord.VoiceClient)
+    fake_client.is_connected.return_value = True
+    fake_client.is_playing.return_value = False
+
+    with patch("app.voice.discord.FFmpegPCMAudio") as mock_ffmpeg:
+        mock_audio = MagicMock()
+        mock_ffmpeg.return_value = mock_audio
+
+        result = play_wind_chime(fake_client)
+
+        mock_ffmpeg.assert_called_once_with(str(WIND_CHIME_PATH))
+        fake_client.play.assert_called_once_with(mock_audio)
+
+    assert result is True
+    assert WIND_CHIME_PATH.is_absolute()
+    assert WIND_CHIME_PATH.name == "wind-chime.wav"
+    fake_client.disconnect.assert_not_called()
+
+
+def test_play_wind_chime_skips_when_not_connected() -> None:
+    """A disconnected voice client is skipped (WARNING), no exception raised."""
+    fake_client = MagicMock(spec=discord.VoiceClient)
+    fake_client.is_connected.return_value = False
+
+    with patch("app.voice.discord.FFmpegPCMAudio"):
+        result = play_wind_chime(fake_client)
+
+    assert result is False
+    fake_client.play.assert_not_called()
+
+
+def test_play_wind_chime_skips_when_already_playing() -> None:
+    """A voice client already playing something (e.g. the timer's own audio)
+    is skipped (WARNING), no exception raised."""
+    fake_client = MagicMock(spec=discord.VoiceClient)
+    fake_client.is_connected.return_value = True
+    fake_client.is_playing.return_value = True
+
+    with patch("app.voice.discord.FFmpegPCMAudio"):
+        result = play_wind_chime(fake_client)
+
+    assert result is False
+    fake_client.play.assert_not_called()
+
+
+def test_play_wind_chime_play_raising_is_caught() -> None:
+    """play() raising ClientException (e.g. ffmpeg missing) is caught,
+    logged, and does not propagate."""
+    fake_client = MagicMock(spec=discord.VoiceClient)
+    fake_client.is_connected.return_value = True
+    fake_client.is_playing.return_value = False
+    fake_client.play.side_effect = discord.ClientException("ffmpeg not found")
+
+    with patch("app.voice.discord.FFmpegPCMAudio"):
+        result = play_wind_chime(fake_client)
+
+    assert result is False
 
 
 # ---------------------------------------------------------------------------
