@@ -9,7 +9,7 @@ title: TeaMode v26Q3.0.0.0
 - User approves in terse replies ("y"). Every merge into `main` needs an explicit User "y" after seeing commits + changed files; Workers commit freely on feature branches. Task Prompts should state "commit freely on your branch" explicitly — one Worker misread the Rules and withheld a commit.
 - Dispatch is foreground and sequential (User preference; parallel worktrees were costly in the MVP). Agent calls nonetheless run as background tasks in this environment — wait for the completion notification before reviewing.
 - `ruff` and `pyright` live only in `.venv/bin`; Task Prompts must tell Workers to `source .venv/bin/activate` first.
-- `app/discord_bot/` uses mixin composition: `TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin)` in `client.py`. Each mixin declares the `self` attributes it reads as type-only class annotations; cross-mixin typing uses structural Protocols (e.g. `_ModalBot` in `views.py`) with `TYPE_CHECKING`-guarded stubs — never `cast()`.
+- `app/discord_bot/` uses mixin composition: `TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin, BreakMixin, ClearMixin)` in `client.py`. Each mixin declares the `self` attributes it reads as type-only class annotations; cross-mixin typing uses structural Protocols (e.g. `_ModalBot` in `views.py`) with `TYPE_CHECKING`-guarded stubs — never `cast()`.
 - Test fakes for channels must be spec'd (`AsyncMock(spec=discord.TextChannel)` / `MagicMock(spec=discord.VoiceChannel)`) because production code now narrows with `isinstance`; unspec'd mocks silently fail narrowing. Interaction fakes must set `channel_id` explicitly.
 - All Discord copy and tunables live in `app/constants.py` (all canonical copy for later features already present, verbatim). Old private `_MSG_*` / `_*_SECONDS` names no longer exist; tests import from `app.constants`.
 - Rate limit decision: allowance 3 per 300 s window, 4th refused (User confirmed over TODO.md wording).
@@ -18,10 +18,12 @@ title: TeaMode v26Q3.0.0.0
 - Session flow as shipped: duration buttons stay enabled while pending (re-pick allowed, latest wins); intention submit disables them and cancels pending expiry; modal double-submit refused with `MSG_SESSION_INACTIVE`. At next session start: previous Time's up and ⛔ line deleted, previous Reflect embed stripped (content kept). `/teamode-clear` must classify Reflect with or without embed.
 - Planning-doc accuracy: Manager-authored prompt details can contradict the Spec (pending-expiry cancel point) — cross-check Task Prompt instructions against Spec wording for state-machine behavior before dispatch.
 - The User keeps smoke-test values uncommitted in `app/constants.py` for long stretches and edits copy there directly. Never let Workers stage that file; commit User-requested lines via backup → edit to HEAD + change → commit → restore; stash that one file around branch switches. Tell Workers to run pytest against `git show HEAD:app/constants.py` and restore.
-- Voice channel status is set only while Ocha is connected (Discord needs Manage Channels otherwise; User chose not to grant it): Timer, Finished (`✨ Done at {hhmm}`), solo-grace Cancelled (set before disconnect). No Starting/Expired/Crashed/Break status. Helper: `LifecycleMixin._set_voice_status(channel_or_id, status)`.
+- Voice channel status is set only while Ocha is connected (Discord needs Manage Channels otherwise; User chose not to grant it): Timer, Finished (`✨ Done at {hhmm}`), solo-grace Cancelled (set before disconnect). Break start/over statuses are set while Ocha stays in voice during breaks. No Starting/Expired/Crashed status. Helper: `LifecycleMixin._set_voice_status(channel_or_id, status)`.
 - Timer surface after Stage 3: `_build_timer_message(...)` returns `(content, embed)`; `_EditState.started_at` / `nudge_sent`; fields Intention / Facilitator / Range (`{start} to {end}`); content `⏳ MM:SS remaining`; nudge threshold 10 min with singular/plural copy, wind chime via `voice.play_wind_chime`, nudge ID on `_SetupMessages` deleted at terminal cleanup.
 - Sound credits for README: wind chime by GnoteSoundz (CC0); reverie by Seemant Chandra (Instagram: piyush.x_x) — do not mention or link the source project. Repo is private.
 - Auto-handoff (random among remaining humans) exists from the MVP but is still unverified live; needs a second account.
+- The User may postpone individual smoke-test steps "to production"; record each postponed check as an entry in `TODO.md` § Notes (User wants them there) and commit it with the Stage's APM artifacts.
+- Discord API pacing: prefer proactive pacing (tunable interval in `app/constants.py`) over relying on discord.py 429 retries for loops of API calls — the User reads the terminal and treats 429 WARNINGs as defects.
 
 ## Stage Summaries
 
@@ -54,3 +56,12 @@ Stage 3 grew from two to three Bot Engineer Tasks and landed in two merges (`097
 - task-03-01.log.md
 - task-03-02.log.md
 - task-03-03.log.md
+
+### Stage 4 - Chained Sessions, Breaks and Channel Clear
+
+Stage 4 grew from two to three Bot Engineer Tasks and landed in two merges. Task 4.1 added `app/discord_bot/breaks.py` (`BreakMixin`, `_ChainState`, `_BreakState`): the post-✅/⛔ chaining prompt, Go again through the shared `_start_session`, and an in-memory 5-minute break with reverie, post-break Go again button and timeout (`3a65017`, `e126814`). Its smoke test passed 5/5 and produced Task 4.3 (User decisions): a long-break streak offer after ≥ 2 chained ≥ 25-minute sessions (`chain_streak` prompt kind, `teamode:<sid>:break:long`) and Ocha staying in voice during breaks with `⏸️ to {hhmm}` / `✨ Break over at {hhmm}` statuses (`a3fcfce`, `46ed2f6`); the User postponed the 4.3 re-check to production and both merged as `ab3711a`. A Manager Handoff (1 → 2) occurred before 4.2. Task 4.2 added pure `app/cleanup.py` (matchers derived from constants via a format-template-to-regex helper, timers checked first) and `ClearMixin` in `app/discord_bot/clear.py`, protecting the live session's messages (including a follow-up Reflect), live chain prompts and breaks, and clearing consumed `_channel_cleanup` IDs (`f12ddeb`). Review found the Worker filtered by `author.bot` rather than Ocha's own id; the Manager fixed it (`2121363`). The User's smoke passed (steps 1, 4, 5; clear without a prior `/teamode` is intended; no-permission refusal postponed to production) but showed discord.py 429 retries, so the Manager added `CLEAR_DELETE_INTERVAL_SECONDS = 1.0` pacing at the User's request (`6194eeb`); merged as `e244097`. Both postponed checks are recorded in `TODO.md` § Notes. Suite at 308 tests.
+
+**Task Logs:**
+- task-04-01.log.md
+- task-04-02.log.md
+- task-04-03.log.md

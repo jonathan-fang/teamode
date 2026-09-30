@@ -12,12 +12,21 @@ title: TeaMode v26Q3.0.0.0
 
 **Stage 3:** Complete
 
-**Stage 4:**
+**Stage 4:** Complete
+
+**Stage 5:**
 
 | Task | Status | Domain | Branch |
 |------|--------|--------|--------|
-| 4.1 | Active | bot-engineer | feat/go-again-and-break |
-| 4.2 | Waiting: 4.1 | bot-engineer | |
+| 5.1 | Ready | bot-engineer | |
+| 5.2 | Ready | bot-engineer | |
+| 5.3 | Ready | asset-designer | |
+
+**Stage 6:**
+
+| Task | Status | Domain | Branch |
+|------|--------|--------|--------|
+| 6.1 | Waiting: 5.1, 5.2, 5.3 | docs-writer | |
 
 ## Version Control
 
@@ -27,9 +36,9 @@ title: TeaMode v26Q3.0.0.0
 
 ## Working Notes
 
-- Planned dispatches remaining: 4.1 (active, own smoke), 4.2 (own smoke), 5.1+5.2, 5.3, 6.1.
-- 4.1 prompt decisions to surface at smoke: chain-prompt buttons valid only while in-memory chain state exists (cleared when a break or new session starts, or on restart → MSG_SESSION_INACTIVE); chain-prompt buttons disabled (not deleted) when a new session starts or a break starts; Break clicker must be in voice (MSG_NOT_IN_VOICE); no break voice status (option B).
-- 6.1 extras: README launcher section + `~/.teamode-secrets` sample; sound credits (no Stretchly mention); voice status only while connected; test-warning cleanup optional.
-- User smoke values uncommitted in app/constants.py (2-min button, WRAP_UP 1, NUDGE_MIN 1, SOLO_GRACE 10) — never stage; stash around merges.
-- 5.1 and 5.2 dependency-Ready, held for slip priority (Stage 5).
+- Planned dispatches remaining: 5.1+5.2 batch (Bot Engineer), 5.3 (Asset Designer), 6.1 (Docs Writer).
+- Cleanup candidate (6.1/TODO): 5 background coroutines catch asyncio.CancelledError and `return` instead of re-raising (MVP pattern in watchdog/solo grace, copied in expiry/break/go-again timeout).
+- 6.1 extras: README launcher section + `~/.teamode-secrets` sample; sound credits (do not mention the source project); voice status only while connected; `/teamode-clear` delete pacing (`CLEAR_DELETE_INTERVAL_SECONDS`) and own-messages-only; ~6–12 "coroutine never awaited" test warnings cleanup optional.
+- Postponed-to-production checks recorded in TODO.md § Notes: 4.3 break/streak re-check; `/teamode-clear` no-Manage-Messages refusal.
+- User smoke values uncommitted in app/constants.py (lines tagged `# smoke`: 2-min button, WRAP_UP 1, NUDGE_MIN 1, BREAK 1, LONG_BREAK 2, LONG_BREAK_MIN_SESSION 2, GO_AGAIN 30, SOLO_GRACE 10) — never stage; stash around merges; Workers run pytest against `git show HEAD:app/constants.py`.
 - `.claude/` left untracked (pre-existing state).

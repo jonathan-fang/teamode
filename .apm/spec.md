@@ -1,6 +1,6 @@
 ---
 title: TeaMode v26Q3.0.0.0
-modified: Voice channel status restricted to while-connected (User decision B after the 3.2 smoke test confirmed out-of-voice edits need Manage Channels); Break status dropped; README launcher/secrets docs added. Earlier: Stage 3 wrap-up refinements. Modified by the Manager.
+modified: /teamode-clear delete pacing and own-author filter after the 4.2 smoke test. Earlier: break refinements per User decision after the 4.1 smoke test (long-break streak offer, bot stays in voice during breaks with break voice statuses). Earlier: voice status while-connected (option B), Stage 3 refinements. Modified by the Manager.
 ---
 
 # APM Spec
@@ -46,7 +46,8 @@ TeaMode is a self-hosted Discord bot (bot user "Ocha", discord.py + asyncio + SQ
 |---|---|
 | `app/discord_bot/__init__.py` | Re-exports `TeaModeBot` so `teamode.py`'s import changes only from `app.bot` to `app.discord_bot`. |
 | `app/discord_bot/client.py` | `TeaModeBot` class, intents, `on_ready` (command sync), `on_interaction` custom_id router, per-session state dicts. |
-| `app/discord_bot/commands.py` | `/teamode`, `/handoff`, `/teamode-stats`, `/teamode-clear` handlers, including the shared session-start function. |
+| `app/discord_bot/commands.py` | `/teamode`, `/handoff`, `/teamode-stats` handlers, including the shared session-start function. |
+| `app/discord_bot/breaks.py`, `app/discord_bot/clear.py` | Go again / break lifecycle (`BreakMixin`); `/teamode-clear` (`ClearMixin`). Added during implementation. |
 | `app/discord_bot/views.py` | `IntentionModal`, duration buttons, Go again / Break buttons, embed builders. |
 | `app/discord_bot/timer.py` | Countdown tick handling, edit cadence, 429 backoff, wrap-up nudge trigger. |
 | `app/discord_bot/lifecycle.py` | End-of-session sequence, follow-up / watchdog, solo grace, pending expiry, break lifecycle, message cleanup hooks, voice status updates. |
@@ -77,8 +78,12 @@ The split preserves all existing runtime behavior. The module list may be adjust
 | `NUDGE_MIN_DURATION_MINUTES` | `10` | Nudge only for sessions ≥ this (User changed from 20 after the embed-timer smoke test). |
 | `PENDING_TIMEOUT_SECONDS` | `600` | Unstarted-session expiry. |
 | `BREAK_MINUTES` | `5` | Break length. |
+| `LONG_BREAK_MINUTES` | `10` | Long-break length after a streak. |
+| `LONG_BREAK_MIN_SESSION_MINUTES` | `25` | Session length that counts toward the streak. |
+| `LONG_BREAK_STREAK` | `2` | Consecutive qualifying sessions before the long break is offered. |
 | `GO_AGAIN_TIMEOUT_SECONDS` | `180` | Post-break Go again button lifetime. |
 | `CLEAR_SCAN_LIMIT` | `200` | `/teamode-clear` history depth. |
+| `CLEAR_DELETE_INTERVAL_SECONDS` | `1.0` | Pause between `/teamode-clear` deletes (User request after the smoke test showed 429 retries). |
 | `FOLLOWUP_TIMEOUT_SECONDS` | `180` | Moved from `bot.py`. |
 | `SOLO_GRACE_SECONDS` | `300` | Moved from `bot.py`. |
 | `EDIT_INTERVAL_SECONDS` | `10` | Timer edit cadence. |
@@ -143,8 +148,10 @@ Solo-grace cancellation keeps its existing text (`Session ended — facilitator 
 
 - After the facilitator answers ✅ or ⛔ on Reflect, Ocha posts the chaining prompt with two buttons: Go again and Take a 5-minute break. Not offered after follow-up timeout. Any voice-channel member may click.
 - **Go again** → calls the shared session start (see Session Flow Changes). Counts toward rate limits.
-- **Break** → in-memory only, not a DB row. Posts the break-started message. (No break voice status — the bot is not connected during a break.) `/teamode` (or Go again) in that channel during a break cancels the break and edits the break message to the break-cancelled line. When `BREAK_MINUTES` elapse: bot joins voice, plays reverie, disconnects, posts the break-over message with a Go again button. If nobody clicks within `GO_AGAIN_TIMEOUT_SECONDS`, the button is disabled (no new text).
-- custom_ids follow the UI-ADR namespace (e.g. `teamode:<session_id>:again`, `teamode:<session_id>:break`).
+- **Break** → in-memory only, not a DB row. Posts the break-started message and joins voice for the break (see "Voice during breaks" below). `/teamode` (or Go again) in that channel during a break cancels the break and edits the break message to the break-cancelled line. When `BREAK_MINUTES` elapse: bot joins voice, plays reverie, disconnects, posts the break-over message with a Go again button. If nobody clicks within `GO_AGAIN_TIMEOUT_SECONDS`, the button is disabled (no new text).
+- custom_ids follow the UI-ADR namespace (e.g. `teamode:<session_id>:again`, `teamode:<session_id>:break`, `teamode:<session_id>:break:long`).
+- **Long-break streak (User decision after the 4.1 smoke test):** per text channel, in memory, track the durations of consecutive sessions that each lasted ≥ `LONG_BREAK_MIN_SESSION_MINUTES` (25), reached ✅/⛔, and — after the first — were started via Go again. When the chaining prompt is posted and the streak has ≥ `LONG_BREAK_STREAK` (2) sessions, it uses `CHAIN_PROMPT_STREAK` (listing the actual durations, e.g. `(25 min / 50 min)`) with a `BUTTON_LONG_BREAK` button that starts a `LONG_BREAK_MINUTES` (10) break instead of the 5-minute one; this repeats for the 3rd, 4th… session. The streak resets when any break is taken, a session is started with `/teamode` instead of Go again, a session is shorter than the threshold, a follow-up times out or a session is cancelled, or the bot restarts.
+- **Voice during breaks (User decision, option (a)):** when a break starts, Ocha joins the voice channel, sets `VOICE_STATUS_BREAK` (`⏸️ to {hhmm}`, the break end) and stays connected silently; when the break ends it sets `VOICE_STATUS_BREAK_OVER` (`✨ Break over at {hhmm}`), plays reverie and disconnects. If the break is cancelled by a new session, Ocha disconnects from voice at cancellation so the new session can connect normally. Voice connect failure at break start → WARNING, the break continues without a status.
 - Go again after a break reconnects to voice through the normal flow; voice reconnection is a known fragile area from the MVP.
 
 ## Messages and Cleanup
@@ -177,7 +184,7 @@ Requires new read helpers in `app/db.py` (none exist today). Queries run on the 
 - Invoker must have Manage Messages permission in the channel; otherwise ephemeral refusal.
 - Scans the last `CLEAR_SCAN_LIMIT` messages in the channel; deletes bot-authored messages that are: welcome embeds, Set Intention prompts, Time's up messages, Reflect/follow-up messages (with or without their embed — the embed may already have been stripped; including the ⛔ follow-up line), wrap-up nudges, chaining prompts, and break messages.
 - Keeps: timer messages (they hold the facilitator intention), handoff notices, and every message belonging to a currently active session or break.
-- Deletes one at a time (no bulk delete, which would need Manage Messages for the bot); respects Discord rate limits (~5 deletes / 5 s per channel) via discord.py's built-in handling. Defers the interaction ephemerally and replies with the count when done.
+- Deletes only Ocha's own messages (author id = bot user id), one at a time (no bulk delete, which would need Manage Messages for the bot), pausing `CLEAR_DELETE_INTERVAL_SECONDS` between deletes to stay under Discord's per-channel limit (~5 deletes / 5 s); discord.py's 429 retry remains the fallback. Usable without a prior `/teamode` (intended). Defers the interaction ephemerally and replies with the count when done.
 - Requires Read Message History (already needed for Reflect reactions).
 
 ## Voice Channel Status
@@ -194,7 +201,9 @@ Set via `VoiceChannel.edit(status=...)` (discord.py routes a status-only edit to
 | Session reaches follow-up (set after Time's up, before reverie/disconnect) | Finished, with completion time HH:MM |
 | Solo-grace cancel (set before the bot disconnects) | Cancelled |
 
-Not set (bot not connected): `/teamode` launch (Starting), pending expiry (Expired), voice-connect failure, startup crash reconciliation (Crashed), breaks. The status otherwise stays as last set until the next timer starts or Discord clears it.
+Also set while connected during breaks: `VOICE_STATUS_BREAK` at break start and `VOICE_STATUS_BREAK_OVER` at break end (Ocha stays in voice for the break).
+
+Not set (bot not connected): `/teamode` launch (Starting), pending expiry (Expired), voice-connect failure, startup crash reconciliation (Crashed). The status otherwise stays as last set until the next timer starts or Discord clears it.
 
 ## Reliability and Operations
 
@@ -262,7 +271,8 @@ All strings below are User-approved and must be used verbatim (placeholders in `
 | `VOICE_STATUS_CANCELLED` | `🍵 Cancelled` |
 | ~~`VOICE_STATUS_EXPIRED`~~ | removed — option B |
 | ~~`VOICE_STATUS_CRASHED`~~ | removed — option B |
-| ~~`VOICE_STATUS_BREAK`~~ | removed — option B (bot not connected during a break) |
+| `VOICE_STATUS_BREAK` | `⏸️ to {hhmm}` (break end; Ocha stays in voice during breaks) |
+| `VOICE_STATUS_BREAK_OVER` | `✨ Break over at {hhmm}` |
 
 ### Embed timer
 
@@ -287,6 +297,9 @@ All strings below are User-approved and must be used verbatim (placeholders in `
 | `BREAK_STARTED` | `⏸️ Break started — back at {hhmm}` |
 | `BREAK_OVER` | `⏸️ Break is over` (with Go again button) |
 | `BREAK_CANCELLED` | `⏸️ Break cancelled by /teamode` |
+| `CHAIN_PROMPT_STREAK` | `Go again? / Take a 10-minute break? You've done {count} sessions in a row ({durations}).` |
+| `BUTTON_LONG_BREAK` | `Take a 10-minute break` |
+| `STREAK_DURATION_ITEM` / `STREAK_DURATION_SEPARATOR` | `{minutes} min` / ` / ` (builds `{durations}`) |
 | Go again expiry | Button disabled; no new text. |
 
 ### Refusals, nudge, expiry

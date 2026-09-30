@@ -171,4 +171,18 @@ Inbox for loose observations and monitoring items. Triage at the end
 of each release cycle. Items under the 7-day waiting period stay here
 until promoted.
 
-_Empty._
+- **Long-break streak and break voice — manual Discord check postponed;
+  observe in production.** The 5-step smoke checklist was not run before
+  merge: (1) two chained ≥ 25-min sessions → prompt offers "Take a
+  10-minute break" and lists the durations; (2) clicking it posts "Break
+  started", Ocha joins voice and shows `⏸️ to HH:MM`, staying connected;
+  (3) at break end the status shows `✨ Break over at HH:MM`, reverie
+  plays, Ocha leaves, "Break is over" + Go again appears; (4) the next
+  chain prompt is back to the normal 5-minute offer; (5) `/teamode`
+  during a break makes Ocha leave voice, edits the message to "Break
+  cancelled by /teamode", and the new session connects normally.
+- **`/teamode-clear` permission refusal — manual Discord check
+  postponed; observe in production.** Run `/teamode-clear` as a member
+  without Manage Messages and confirm the ephemeral refusal "You need
+  the Manage Messages permission to run /teamode-clear." (other smoke
+  steps passed; delete pacing via `CLEAR_DELETE_INTERVAL_SECONDS`).

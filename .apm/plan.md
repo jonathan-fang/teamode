@@ -1,6 +1,6 @@
 ---
 title: TeaMode v26Q3.0.0.0
-modified: 3.2 follow-up restricts voice status to while-connected (User decision B); 4.1 drops Break voice status; 6.1 adds launcher/secrets docs. Earlier: Tasks 2.5 and 3.3 added. Modified by the Manager.
+modified: Added Task 4.3 (break refinements) per User decision after the 4.1 smoke test; 4.2 now depends on 4.3 and must classify the streak prompt. Earlier: 3.2 follow-up (option B), Tasks 2.5 and 3.3. Modified by the Manager.
 ---
 
 # APM Plan
@@ -20,7 +20,7 @@ modified: 3.2 follow-up restricts voice status to while-connected (User decision
 | 1 | Foundation: Tooling, Package Split, Constants, Typing | 4 | Bot Engineer |
 | 2 | Core Reliability and Session Behavior | 5 | Bot Engineer |
 | 3 | Embed Timer and Voice Channel Status | 3 | Bot Engineer |
-| 4 | Chained Sessions, Breaks and Channel Clear | 2 | Bot Engineer |
+| 4 | Chained Sessions, Breaks and Channel Clear | 3 | Bot Engineer |
 | 5 | Extras: Stats, Teacup Banner, Art Assets | 3 | Bot Engineer, Asset Designer |
 | 6 | Documentation and Release Prep | 1 | Docs Writer |
 
@@ -52,7 +52,8 @@ end
 
 subgraph S4["Stage 4: Chaining and Clear"]
   direction LR
-  T4_1["4.1 Go Again + Break<br/><i>Bot Engineer</i>"] --> T4_2["4.2 /teamode-clear<br/><i>Bot Engineer</i>"]
+  T4_1["4.1 Go Again + Break<br/><i>Bot Engineer</i>"] --> T4_3["4.3 Break Refinements<br/><i>Bot Engineer</i>"]
+  T4_3 --> T4_2["4.2 /teamode-clear<br/><i>Bot Engineer</i>"]
 end
 
 subgraph S5["Stage 5: Extras"]
@@ -91,6 +92,7 @@ style T3_2 fill:#95d5b2,color:#000
 style T3_3 fill:#95d5b2,color:#000
 style T4_1 fill:#95d5b2,color:#000
 style T4_2 fill:#95d5b2,color:#000
+style T4_3 fill:#95d5b2,color:#000
 style T5_1 fill:#95d5b2,color:#000
 style T5_2 fill:#95d5b2,color:#000
 style T5_3 fill:#f4a261,color:#000
@@ -298,13 +300,26 @@ style T6_1 fill:#a8dadc,color:#000
 4. Write tests; run the full validation pipeline.
 5. Prepare the smoke checklist and return Partial.
 
+### Task 4.3: Break Refinements - Bot Engineer
+
+* **Objective:** Offer a 10-minute break after a streak of long chained sessions, and keep Ocha in voice during breaks with break voice statuses.
+* **Output:** Per-channel streak tracking; streak chaining prompt with a long-break button; long break length; Ocha joins voice at break start, sets `VOICE_STATUS_BREAK`, stays connected, sets `VOICE_STATUS_BREAK_OVER` before reverie; disconnect on cancellation; tests; smoke re-check.
+* **Validation:** Tests prove: the streak counts only ≥ 25-min ✅/⛔ sessions chained by Go again and resets on break / `/teamode` / short session / timeout / cancel; at ≥ 2 the prompt is `CHAIN_PROMPT_STREAK` with the actual durations and a long-break button (`teamode:<sid>:break:long`) that runs `LONG_BREAK_MINUTES`; 3rd+ still offers it; after any break the next prompt is the normal one; break start connects voice and sets `⏸️ to HH:MM` while connected; break end sets `✨ Break over at HH:MM` before reverie/disconnect; cancel disconnects the break voice client; connect failure → WARNING, break continues. Full pipeline passes. **User smoke re-check (Partial).**
+* **Guidance:** User decisions after the 4.1 smoke test (Spec §Chained Sessions and Breaks "Long-break streak", "Voice during breaks"; §Voice Channel Status). Constants are pre-added by the Manager. `_start_session` needs to know whether it was reached via Go again. Beware voice reconnect fragility: the break's voice client must be disconnected before a new session's modal-submit connect.
+* **Dependencies:** Task 4.1
+
+1. Track the streak per channel; pick the chaining prompt variant and long-break button.
+2. Run long breaks with `LONG_BREAK_MINUTES`; reset the streak on any break.
+3. Join voice at break start with status; stay connected; set break-over status before reverie; disconnect on cancel.
+4. Write tests; run the full validation pipeline; return Partial for the re-check.
+
 ### Task 4.2: /teamode-clear - Bot Engineer
 
 * **Objective:** Add `/teamode-clear` to delete past TeaMode clutter in a channel while keeping timers and active-session messages.
 * **Output:** `app/cleanup.py` (pure message classifiers); `/teamode-clear` command; tests; smoke checklist.
-* **Validation:** Unit tests on `cleanup.py` classify fixtures of every message type correctly: delete-eligible (welcome embed, Set Intention prompt, Time's up with Session-complete embed, Reflect, ⛔ follow-up line, wrap-up nudge, chaining prompt, break messages) vs kept (timer messages, handoff notices, non-bot messages, unrelated bot messages). Bot tests: invoker without Manage Messages gets `CLEAR_NO_PERMISSION`; scan uses `CLEAR_SCAN_LIMIT`; messages belonging to an active session or break are kept; response deferred ephemerally then `CLEAR_DONE` with the count, or `CLEAR_NOTHING`; individual delete failures are logged and skipped. Full pipeline passes. **User smoke test (Partial):** run it in a channel with several past sessions and confirm what remains.
+* **Validation:** Unit tests on `cleanup.py` classify fixtures of every message type correctly: delete-eligible (welcome embed, Set Intention prompt, Time's up with Session-complete embed, Reflect, ⛔ follow-up line, wrap-up nudge, chaining prompt incl. the streak variant, break started / cancelled / over messages) vs kept (timer messages, handoff notices, non-bot messages, unrelated bot messages). Bot tests: invoker without Manage Messages gets `CLEAR_NO_PERMISSION`; scan uses `CLEAR_SCAN_LIMIT`; messages belonging to an active session or break are kept; response deferred ephemerally then `CLEAR_DONE` with the count, or `CLEAR_NOTHING`; individual delete failures are logged and skipped. Full pipeline passes. **User smoke test (Partial):** run it in a channel with several past sessions and confirm what remains.
 * **Guidance:** Spec §Commands (`/teamode-clear`) and §Canonical Copy. Classify by author (`message.author.id == client.user.id`) plus canonical copy / embed title matching against `app/constants.py` values (so edits to copy keep classification in sync — derive matchers from the constants, not duplicated literals). Timer messages are identifiable by the timer embed title pattern and must never match. Reflect messages may have had their embed stripped at the next session start (content `[Follow-up] React with ✅…` remains) — classify both forms. Permission check: `interaction.permissions.manage_messages` (invoker's resolved channel permissions). Use `channel.history(limit=CLEAR_SCAN_LIMIT)` and delete one at a time (no `purge`/bulk delete, which needs Manage Messages for the bot); discord.py handles 429s. Defer with `ephemeral=True` before scanning. Register the command in the same tree as `/teamode`; command description from constants.
-* **Dependencies:** Task 4.1 (also relies on the nudge message from Task 3.1, reached through the chain)
+* **Dependencies:** Task 4.3 (Task 4.1 and the nudge from Task 3.1 through the chain)
 
 1. Implement classifiers in `app/cleanup.py` derived from constants.
 2. Implement the command: permission check, defer, scan, filter active messages, delete, report.
