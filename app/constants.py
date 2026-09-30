@@ -157,7 +157,7 @@ SOLO_GRACE_ENDED = "Session ended — facilitator did not return."
 # ---------------------------------------------------------------------------
 
 VOICE_STATUS_TIMER = "⏳ to {hhmm}"
-VOICE_STATUS_FINISHED = "✨ Finished TeaMode at {hhmm}"
+VOICE_STATUS_FINISHED = "✨ Done at {hhmm}"
 VOICE_STATUS_CANCELLED = "🍵 Cancelled"
 
 # ---------------------------------------------------------------------------
