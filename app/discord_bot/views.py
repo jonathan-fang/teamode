@@ -35,7 +35,7 @@ from app.constants import (
     TIMER_EMBED_TITLE,
     TIMER_FIELD_FACILITATOR,
     TIMER_FIELD_INTENTION,
-    TIMER_FIELD_STARTED_AT,
+    TIMER_FIELD_RANGE,
     TIMER_FIELD_VALUE_MAX_LENGTH,
     TIMER_REMAINING,
     TIMER_TIME_RANGE,
@@ -124,7 +124,7 @@ def _build_timer_message(
         name=TIMER_FIELD_FACILITATOR, value=f"<@{facilitator_id}>", inline=False
     )
     embed.add_field(
-        name=TIMER_FIELD_STARTED_AT,
+        name=TIMER_FIELD_RANGE,
         value=TIMER_TIME_RANGE.format(
             start=timer_format.format_hhmm(started_at, TEAMODE_TIMEZONE),
             end=timer_format.format_hhmm(
@@ -164,7 +164,7 @@ class _EditState:
     # when the timer message is first sent, so tick edits reuse it verbatim.
     mention_line: str = ""
     # Timezone-aware activation time, captured once when the timer message
-    # is first sent, so every edit's "Started at" field reads the same
+    # is first sent, so every edit's "Range" field reads the same
     # value. Defaults to "now" only for callers (tests) that don't care.
     started_at: datetime = field(default_factory=_now)
     # Set once the wrap-up nudge has fired for this session, so a second
@@ -376,7 +376,7 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         ]
         mention_line = " ".join(m.mention for m in mention_members)
 
-        # Captured once, here, and reused by every tick edit so "Started at"
+        # Captured once, here, and reused by every tick edit so "Range"
         # never drifts across the session.
         started_at = _now()
         initial_content, initial_embed = _build_timer_message(

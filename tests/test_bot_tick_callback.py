@@ -512,7 +512,7 @@ async def test_long_intention_truncated_in_field(
 
 
 def test_started_at_field_shows_start_to_end_range() -> None:
-    """The Started at field shows the local start and end time as a range."""
+    """The Range field shows the local start and end time as a range."""
     from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
 
@@ -531,4 +531,4 @@ def test_started_at_field_shows_start_to_end_range() -> None:
         )
 
     field_values = {f.name: f.value for f in embed.fields}
-    assert field_values["Started at"] == "15:50 to 16:15"
+    assert field_values["Range"] == "15:50 to 16:15"
