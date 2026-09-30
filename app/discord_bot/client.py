@@ -11,6 +11,7 @@ from discord import app_commands
 
 from app.config import TEAMODE_DEV_GUILD_IDS, TEAMODE_TIMEZONE
 from app.discord_bot.breaks import BreakMixin, _BreakState, _ChainState
+from app.discord_bot.clear import ClearMixin
 from app.discord_bot.commands import CommandsMixin
 from app.discord_bot.lifecycle import LifecycleMixin
 from app.discord_bot.timer import TimerMixin
@@ -26,7 +27,9 @@ from app.session import SessionRegistry
 logger = logging.getLogger(__name__)
 
 
-class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin, BreakMixin):
+class TeaModeBot(
+    CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin, BreakMixin, ClearMixin
+):
     """Owns the Discord client, command tree, DB connection, and session registry.
 
     Dependencies (conn and registry) are injected by the entry point so that
@@ -130,8 +133,9 @@ class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin, BreakMix
         self.client.event(self.on_raw_reaction_add)
         self.client.event(self.on_voice_state_update)
 
-        # Register the slash command on this instance.
+        # Register the slash commands on this instance.
         self._register_command()
+        self._register_clear_command()
 
     # ------------------------------------------------------------------
     # Event handlers
