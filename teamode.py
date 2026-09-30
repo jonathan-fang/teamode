@@ -44,8 +44,8 @@ def main() -> None:
 
     # Reconciliation must run after init_db (table must exist) and before the
     # gateway starts (avoid racing a fresh /teamode invocation).
-    reconciled = db.reconcile_crashed_sessions(conn)
-    logger.info("Reconciled %d crashed session(s) on startup", reconciled)
+    crashed_count = db.reconcile_crashed_sessions(conn)
+    logger.info("Reconciled %d crashed session(s) on startup", crashed_count)
 
     registry = SessionRegistry(conn)
     bot = TeaModeBot(conn=conn, registry=registry)

@@ -116,8 +116,17 @@ def _make_voice_channel(channel_id: int, members: list[Any]) -> MagicMock:
 
 
 def _make_fake_voice_client() -> MagicMock:
-    """Build a minimal fake discord.VoiceClient."""
+    """Build a minimal fake discord.VoiceClient.
+
+    ``channel`` is a real ``discord.VoiceClient`` instance attribute (set in
+    ``__init__``, not a class attribute), so ``spec=`` alone does not expose
+    it — set it explicitly so ``_run_solo_grace``'s voice-status-before-
+    disconnect step can resolve it via ``isinstance`` narrowing.
+    """
     vc = MagicMock(spec=discord.VoiceClient)
+    channel = MagicMock(spec=discord.VoiceChannel)
+    channel.edit = AsyncMock()
+    vc.channel = channel
     return vc
 
 

@@ -8,7 +8,8 @@ import random
 
 import discord
 
-from app import voice
+from app import timer_format, voice
+from app.config import TEAMODE_TIMEZONE
 from app.constants import (
     AUTO_HANDOFF_ANNOUNCE,
     END_EMBED_BODY,
@@ -24,6 +25,8 @@ from app.constants import (
     REFLECT_EMBED_TITLE,
     SOLO_GRACE_ENDED,
     SOLO_GRACE_SECONDS,
+    VOICE_STATUS_CANCELLED,
+    VOICE_STATUS_FINISHED,
 )
 from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.views import (
@@ -32,6 +35,7 @@ from app.discord_bot.views import (
     _build_welcome_embed,
     _ChannelCleanup,
     _EditState,
+    _now,
     _SetupMessages,
 )
 from app.session import SessionRegistry, SessionState
@@ -60,11 +64,67 @@ class LifecycleMixin:
     _channel_cleanup: dict[int, _ChannelCleanup]
 
     # ------------------------------------------------------------------
+    # Voice channel status
+    # ------------------------------------------------------------------
+
+    async def _set_voice_status(
+        self, voice_channel_or_id: discord.VoiceChannel | int, status: str
+    ) -> None:
+        """Set *voice_channel_or_id*'s voice channel status to *status*.
+
+        Accepts either a resolved ``discord.VoiceChannel`` or a channel id
+        (resolved here via ``self.client.get_channel`` and narrowed to
+        ``VoiceChannel``). Never raises: a missing/non-voice channel, a
+        missing permission (``discord.Forbidden``), or any other
+        ``discord.HTTPException`` is logged at WARNING and swallowed so a
+        status update never breaks the session flow. A successful update is
+        logged at INFO.
+
+        Discord requires the **Manage Channels** permission to set a voice
+        channel's status when the bot is not connected to that channel; with
+        only **Set Voice Channel Status**, it can set the status only while
+        connected. Callers therefore only invoke this while Ocha is in the
+        voice channel (Timer on activation, Finished before disconnect,
+        Cancelled on solo-grace timeout before disconnecting).
+        """
+        if isinstance(voice_channel_or_id, discord.VoiceChannel):
+            channel = voice_channel_or_id
+        else:
+            resolved = self.client.get_channel(voice_channel_or_id)
+            if not isinstance(resolved, discord.VoiceChannel):
+                logger.warning(
+                    "Channel %s is not a VoiceChannel — skipping voice status %r",
+                    voice_channel_or_id,
+                    status,
+                )
+                return
+            channel = resolved
+
+        try:
+            await channel.edit(status=status)
+        except discord.Forbidden:
+            logger.warning(
+                "Missing permission to set voice status %r on channel %s",
+                status,
+                channel.id,
+            )
+            return
+        except discord.HTTPException:
+            logger.warning(
+                "Failed to set voice status %r on channel %s", status, channel.id
+            )
+            return
+        logger.info("Set voice status on channel %s to %r", channel.id, status)
+
+    # ------------------------------------------------------------------
     # Centralized terminal-state cleanup
     # ------------------------------------------------------------------
 
     async def _on_session_terminal(
-        self, session_id: int, *, delete_setup_messages: bool = True
+        self,
+        session_id: int,
+        *,
+        delete_setup_messages: bool = True,
     ) -> None:
         """Cancel/clear every per-session background task and in-memory
         state entry for *session_id*, and (usually) delete its setup
@@ -78,6 +138,13 @@ class LifecycleMixin:
         ``delete_setup_messages=False``. Idempotent: each pop is a no-op
         when the key is already gone, so callers that already did some of
         this cleanup themselves are safe to call it again.
+
+        Voice status is not set here: it can only be set while Ocha is
+        connected to the voice channel (see ``_set_voice_status``), and by
+        the time a session reaches a terminal state the bot has either
+        already disconnected or never connected. Callers that need a status
+        set on the way to a terminal state (Finished, solo-grace Cancelled)
+        set it themselves before disconnecting.
         """
         current = asyncio.current_task()
         for task_map in (
@@ -193,7 +260,10 @@ class LifecycleMixin:
             session_id,
             sleep_seconds,
         )
-        await self._on_session_terminal(session_id, delete_setup_messages=False)
+        await self._on_session_terminal(
+            session_id,
+            delete_setup_messages=False,
+        )
 
     async def _run_end_of_session(
         self,
@@ -242,6 +312,16 @@ class LifecycleMixin:
         end_message = await channel.send(
             content=mention_content, embed=session_complete_embed
         )
+
+        # Set the Finished voice status now that Time's up has posted.
+        session = self._registry.get(session_id)
+        if session is not None:
+            await self._set_voice_status(
+                int(session.voice_channel_id),
+                VOICE_STATUS_FINISHED.format(
+                    hhmm=timer_format.format_hhmm(_now(), TEAMODE_TIMEZONE)
+                ),
+            )
 
         # Remember this "Time's up" message so the *next* /teamode invoked
         # in the same text channel can delete it (see CommandsMixin —
@@ -546,7 +626,14 @@ class LifecycleMixin:
                     session_id,
                 )
 
-        # 3) Disconnect voice (no reverie).
+        # 3) Set the Cancelled voice status while still connected — Discord
+        # requires Manage Channels to set it after disconnecting.
+        if voice_client is not None and isinstance(
+            voice_client.channel, discord.VoiceChannel
+        ):
+            await self._set_voice_status(voice_client.channel, VOICE_STATUS_CANCELLED)
+
+        # 4) Disconnect voice (no reverie).
         if voice_client is not None:
             try:
                 await voice.disconnect(voice_client)
@@ -556,7 +643,7 @@ class LifecycleMixin:
                     session_id,
                 )
 
-        # 4) Write status='cancelled' to SQLite.
+        # 5) Write status='cancelled' to SQLite.
         try:
             self._registry.mark_cancelled(session_id=session_id)
         except Exception:
