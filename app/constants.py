@@ -28,6 +28,9 @@ WRAP_UP_MINUTES = 3  # 3
 NUDGE_MIN_DURATION_MINUTES = 10  # 10
 PENDING_TIMEOUT_SECONDS = 600  # 600
 BREAK_MINUTES = 5
+LONG_BREAK_MINUTES = 10
+LONG_BREAK_MIN_SESSION_MINUTES = 25  # sessions this long count toward the streak
+LONG_BREAK_STREAK = 2  # chained qualifying sessions before the long break
 GO_AGAIN_TIMEOUT_SECONDS = 180
 CLEAR_SCAN_LIMIT = 200
 
@@ -159,6 +162,8 @@ SOLO_GRACE_ENDED = "Session ended — facilitator did not return."
 VOICE_STATUS_TIMER = "⏳ to {hhmm}"
 VOICE_STATUS_FINISHED = "✨ Done at {hhmm}"
 VOICE_STATUS_CANCELLED = "🍵 Cancelled"
+VOICE_STATUS_BREAK = "⏸️ to {hhmm}"
+VOICE_STATUS_BREAK_OVER = "✨ Break over at {hhmm}"
 
 # ---------------------------------------------------------------------------
 # New copy — timer embed (used later)
@@ -185,6 +190,16 @@ BUTTON_BREAK = "Take a 5-minute break"
 BREAK_STARTED = "⏸️ Break started — back at {hhmm}"
 BREAK_OVER = "⏸️ Break is over"
 BREAK_CANCELLED = "⏸️ Break cancelled by /teamode"
+
+# Chaining prompt after a streak of long chained sessions. ``{durations}``
+# is built from STREAK_DURATION_ITEM joined by STREAK_DURATION_SEPARATOR.
+CHAIN_PROMPT_STREAK = (
+    "Go again? / Take a 10-minute break?"
+    " You've done {count} sessions in a row ({durations})."
+)
+BUTTON_LONG_BREAK = "Take a 10-minute break"
+STREAK_DURATION_ITEM = "{minutes} min"
+STREAK_DURATION_SEPARATOR = " / "
 
 # ---------------------------------------------------------------------------
 # New copy — refusals, nudge, expiry (used later)
