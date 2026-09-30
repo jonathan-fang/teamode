@@ -180,6 +180,11 @@ class _SetupMessages:
     channel_id: int
     welcome_message_id: int
     intention_message_id: int | None = None
+    # Set once the wrap-up nudge message has been sent (see TimerMixin),
+    # so terminal cleanup deletes it alongside the welcome and Set
+    # Intention messages. None when no nudge has fired (e.g. short
+    # sessions, or terminal cleanup before the trigger point).
+    nudge_message_id: int | None = None
 
 
 @dataclass

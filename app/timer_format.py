@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, tzinfo
 
 from app.constants import (
+    MSG_WRAP_UP_NUDGE,
+    MSG_WRAP_UP_NUDGE_ONE,
     NUDGE_MIN_DURATION_MINUTES,
     PHASE_DEEP_FOCUS,
     PHASE_WRAP_UP,
@@ -91,3 +93,14 @@ def should_nudge(duration_minutes: int, seconds_remaining: int) -> bool:
     if trigger_seconds >= total_seconds:
         return False
     return seconds_remaining == trigger_seconds
+
+
+def format_wrap_up_nudge(minutes: int) -> str:
+    """Return the wrap-up nudge message for *minutes* left.
+
+    Singular copy (:data:`MSG_WRAP_UP_NUDGE_ONE`) for exactly 1 minute,
+    plural (:data:`MSG_WRAP_UP_NUDGE`) for 2 or more.
+    """
+    if minutes == 1:
+        return MSG_WRAP_UP_NUDGE_ONE
+    return MSG_WRAP_UP_NUDGE.format(minutes=minutes)

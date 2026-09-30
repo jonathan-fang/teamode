@@ -176,7 +176,7 @@ PHASE_DEEP_FOCUS = "Deep focus"
 PHASE_WRAP_UP = "Wrap up — finish your current task"
 TIMER_REMAINING = "{mmss} remaining"
 TIMER_PROGRESS = "{bar} {percent}%"
-TIMER_CONTENT = "⏳ {mmss}"
+TIMER_CONTENT = "⏳ {mmss} remaining"
 
 # ---------------------------------------------------------------------------
 # New copy — chaining and breaks (used later)
@@ -197,7 +197,9 @@ MSG_RATE_LIMIT_USER = "Per-user rate limit — try again in {seconds} seconds."
 MSG_RATE_LIMIT_GUILD = (
     "Daily server limit reached ({cap} sessions per day) — resets at midnight."
 )
+# Used for WRAP_UP_MINUTES >= 2 — see MSG_WRAP_UP_NUDGE_ONE for the 1-minute case.
 MSG_WRAP_UP_NUDGE = "⏰ Wrap-up nudge — {minutes} minutes left."
+MSG_WRAP_UP_NUDGE_ONE = "⏰ Wrap-up nudge — 1 minute left."
 MSG_PENDING_EXPIRED = "🍵 Expired"
 
 # ---------------------------------------------------------------------------

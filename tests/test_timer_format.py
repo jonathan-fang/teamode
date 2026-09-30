@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.constants import (
+    MSG_WRAP_UP_NUDGE,
+    MSG_WRAP_UP_NUDGE_ONE,
     NUDGE_MIN_DURATION_MINUTES,
     PHASE_DEEP_FOCUS,
     PHASE_WRAP_UP,
@@ -18,6 +20,7 @@ from app.timer_format import (
     format_hhmm,
     format_mmss,
     format_progress_bar,
+    format_wrap_up_nudge,
     select_phase,
     should_nudge,
 )
@@ -141,3 +144,20 @@ def test_should_nudge_false_when_trigger_not_before_total(
     trigger_seconds = WRAP_UP_MINUTES * 60
     duration_minutes = WRAP_UP_MINUTES  # total_seconds == trigger_seconds
     assert should_nudge(duration_minutes, trigger_seconds) is False
+
+
+# ---------------------------------------------------------------------------
+# format_wrap_up_nudge
+# ---------------------------------------------------------------------------
+
+
+def test_format_wrap_up_nudge_singular_at_one_minute() -> None:
+    assert format_wrap_up_nudge(1) == MSG_WRAP_UP_NUDGE_ONE
+
+
+def test_format_wrap_up_nudge_plural_at_two_minutes() -> None:
+    assert format_wrap_up_nudge(2) == MSG_WRAP_UP_NUDGE.format(minutes=2)
+
+
+def test_format_wrap_up_nudge_plural_at_three_minutes() -> None:
+    assert format_wrap_up_nudge(3) == MSG_WRAP_UP_NUDGE.format(minutes=3)
