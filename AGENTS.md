@@ -154,6 +154,9 @@ Propose the intended change first, wait for confirmation, then edit.
 Keep this rule in force even for repository docs, `.apm/` planning
 artifacts, and small refactors.
 
+Exception: during APM Task execution, the checkpoint rules in
+APM_RULES › Approval Workflow apply instead.
+
 ## Configuration & Platform Notes
 
 Do not hardcode local paths or tokens. Read `DISCORD_BOT_TOKEN` and
@@ -187,6 +190,13 @@ APM skills:
 
 `apm-communication` is a support skill, not a direct user command.
 
+## Working Preferences
+
+- The MVP worked best with agents running one at a time. Parallel
+  worktrees cost about 75k extra tokens.
+- The user approves in short replies like "y" and "1y 2y".
+- The user tends to add TODO entries freely.
+
 ---
 
 # APM Automatic Handoff
@@ -202,29 +212,40 @@ APM_RULES {
 
 ## Approval Workflow
 
-- Obtain explicit user approval before making any code or documentation
-  edit — present the proposed change and wait for confirmation before
-  modifying any file.
-- Obtain explicit user approval before creating any commit — present
-  the commit message and changed files, then wait for confirmation.
-- If approval has not been granted, stop and present the proposed
-  change or next action. Do not proceed unilaterally.
+- For APM Task execution in this project, the User approved
+  checkpoint-based approval. This replaces the per-edit rule in
+  § Approval Gates above and the "wait for plan approval" rule in the
+  User's global instructions: a Task Prompt from the Manager is the
+  approved plan, so implement it without asking before each edit.
+- Stop and return Partial (never proceed past these) when the Task
+  reaches a User checkpoint:
+  - a manual Discord smoke test,
+  - review of generated art assets,
+  - any Discord-facing string that is not already defined in
+    `app/constants.py` or given in the Task Prompt,
+  - any decision the Task Prompt marks as the User's.
+- Obtain explicit User approval before creating any commit, merge, tag
+  or push — present the message and changed files, then wait.
+- Outside APM Task execution (ad-hoc chats), § Approval Gates above
+  applies unchanged.
 
 ## Validation Protocol
 
 - For all code changes, run the full validation pipeline. Blocking
-  checks must pass clean before requesting commit approval:
+  checks must pass clean before reporting a Task complete or
+  requesting commit approval:
   1. `ruff format --check app/ teamode.py tests/`
   2. `ruff check app/ teamode.py tests/`
   3. `.venv/bin/python -m pytest tests/`
-  4. `pyright`
+  4. `pyright` (bare, no flags — configured in `pyproject.toml`)
   5. `.LLMAO/scan_injection.sh .apm`
-- Any blocking-check failure halts the commit. Zero-error target —
-  fix root causes rather than bypassing.
+- Any blocking-check failure halts completion. Zero-error target —
+  fix root causes rather than bypassing (no disabling rules, no
+  skipped tests).
 - For changes affecting user-visible Discord behavior (slash command
-  shape, embeds, button rows, modals, voice playback): flag the change
-  as requiring a manual Discord smoke test and note it explicitly when
-  requesting commit approval.
+  shape, embeds, button rows, modals, message deletion, voice playback,
+  voice channel status): flag the change as requiring a manual Discord
+  smoke test and note it explicitly in the completion report.
 
 ## Smoke Test Delivery
 
@@ -239,15 +260,19 @@ APM_RULES {
     worktree path.
   - **In-Discord steps:** which server, which voice channel, which
     command, expected behavior, expected SQLite row state with a
-    paste-ready query.
+    paste-ready query, e.g.
+    `sqlite3 sessions.db "SELECT id,status,duration_minutes,started_at,ended_at FROM sessions ORDER BY id DESC LIMIT 5;"`
+  - If a step needs a temporarily lowered constant (long timeouts),
+    give the exact edit in `app/constants.py` and an explicit reminder
+    to revert it afterwards.
 - Reduce friction: every smoke test is either a single paste-able
   command or a numbered checklist. No ambiguity.
 
 ## User Collaboration
 
 - When a Task requires user-provided input (Discord token, server
-  access, asset files, judgment-call approval), return Partial with a
-  specific request rather than blocking.
+  access or permissions, asset review, judgment-call approval), return
+  Partial with a specific request rather than blocking.
 - Requests must be concrete: exact commands to run, expected output
   shape, file format expected, decision being asked.
 
@@ -255,23 +280,97 @@ APM_RULES {
 
 Commit format, versioning, test runner, package structure, test
 patching, async patterns, and TeaMode-specific rate-limit / voice /
-SQLite rules are defined in `.project-meta/conventions.md`. Do not
-duplicate those rules here — read and follow conventions.md directly.
+SQLite rules are defined in `.project-meta/conventions.md`. Discord
+surface rules (palette, embed formatting, custom_id namespace
+`teamode:<session_id>:<purpose>[:<value>]`, authorization) are in
+`.project-meta/UI-ADR.md`. Read and follow both directly; do not
+duplicate them here.
 
 **Agent-specific additions** (not in conventions.md):
 - No `Co-Authored-By`, no "Assisted by Claude" trailer, no attribution
   lines of any kind in commits.
 - Always use `.venv/bin/python -m pytest tests/`.
+- Refer to the Python package as `app/` (the repo root directory is
+  also named `teamode/`).
+
+## Code Organization
+
+- Discord-free logic (formatting, rate limiting, stats aggregation,
+  message classification, session state) lives in flat modules under
+  `app/` with no `discord` imports and injectable clocks, so it is unit
+  testable. `app/discord_bot/` holds only Discord wiring: commands,
+  views, event handlers, timer and lifecycle orchestration.
+- Every tunable number (durations, timeouts, limits, intervals, scan
+  depths, widths) and every string Ocha sends to Discord (messages,
+  embed titles/fields, button labels, slash-command descriptions, voice
+  channel statuses) lives in `app/constants.py` as a named constant,
+  using `str.format` placeholders for variable parts. Palette hex
+  values live there too. Never inline these in other modules.
+  `app/constants.py` must not import `discord` or `app.config`.
+- Discord event handlers on the client must be named `on_<event>`
+  (discord.py routes `client.event` by function name).
+
+## Typing
+
+- Annotate parameters and return types on every function in `app/`
+  and `teamode.py` (Ruff `ANN` enforces this; `tests/` exempt).
+  Annotate local variables only when it adds information: a value
+  that can be missing or have more than one type, or a non-obvious
+  container shape. Let tooling infer the rest.
+- Do not use `cast()` or `# type: ignore`. Narrow with `isinstance`,
+  explicit `None` checks, or a more precise API (e.g.
+  `interaction.channel_id`). The only exception is a genuine bug in
+  upstream type stubs: then use `# type: ignore[<specific-code>]` with
+  a one-line comment explaining why, and call it out in the completion
+  report.
+
+## Discord Messaging
+
+- Any message that will later be edited or deleted must be sent with
+  `channel.send`, or have its ID captured
+  (`interaction.original_response()`, `followup.send(..., wait=True)`),
+  and must be edited/deleted through the channel
+  (`channel.get_partial_message(id)`), never through the interaction
+  webhook — interaction tokens expire after 15 minutes and sessions
+  outlast that.
+- Discord edit/delete/status calls that fail (`NotFound`, `Forbidden`,
+  `HTTPException`) are logged at WARNING and must not break the session
+  flow.
+- Never let a stale button crash or mutate state: component
+  interactions for missing or finished sessions get the standard
+  "session no longer active" ephemeral refusal from constants.
+
+## Async and Logging
+
+- Every background task (`asyncio.create_task`) must log unexpected
+  exceptions with `logger.exception` (try/except in the coroutine or a
+  done-callback); no task failure may be silently dropped.
+  `asyncio.CancelledError` is expected on cancellation and must be
+  re-raised, not logged as an error.
+- Log to stdout via the module `logger`: INFO for lifecycle events
+  (session start/end with state, break start/end/cancel, rate-limit
+  refusals, cleanup counts); WARNING for degraded operation (missing
+  permission, missing ffmpeg, HTTP 429, failed delete, invalid
+  config); `logger.exception` inside error handlers.
 
 ## Execution Constraints
 
 - Preserve existing discord.py runtime behavior unless a change is
   explicitly within task scope.
-- Do not add new broad dependencies unless explicitly approved.
+- Do not add dependencies. The only approved addition for this
+  project is Pillow, dev-only, in `requirements-dev.txt` (never in
+  runtime `requirements.txt`). discord.py stays at 2.7.1.
 - Do not add LLM-generated or AI-written text to the bot's runtime
-  output (anything Ocha sends to Discord).
+  output (anything Ocha sends to Discord). Use only strings defined in
+  `app/constants.py` or given verbatim in the Task Prompt. The ASCII
+  teacup banner (`TEACUP_BANNER`) is a User-approved exception.
 - Do not perform destructive git operations (force push, reset --hard,
-  branch -D) without explicit user instruction.
+  branch -D, checkout/restore of files you did not change) without
+  explicit User instruction.
+- The working tree carries the User's own uncommitted edits (e.g.
+  `README.md`, `TODO.md`, `changelog.md`,
+  `docs/external-interest-log.md`). Preserve them; never revert or
+  overwrite them wholesale — make targeted edits only.
 
 ## Token Security
 
@@ -290,7 +389,7 @@ duplicate those rules here — read and follow conventions.md directly.
 
 These rules apply to every test you write. Full reference:
 `.project-meta/conventions.md` § Testing and
-`.project-meta/.LLMAO/test-patterns.md`. Embedded essentials:
+`.LLMAO/test-patterns.md`. Embedded essentials:
 
 - **SQLite**: use `sqlite3.connect(":memory:")` for tests that
   exercise the database. Do not mock the SQLite layer — exercise the
@@ -300,11 +399,17 @@ These rules apply to every test you write. Full reference:
   breaks async paths.
 - **Discord**: never hit a live Discord gateway in any test. Use a
   `FakeInteraction` fixture that exposes only the attributes the code
-  under test reads.
+  under test reads. Use `MagicMock(spec=discord.VoiceChannel)` (etc.)
+  so `isinstance` narrowing works.
 - **Voice**: mock `voice_client.play`; do not shell out to `ffmpeg`
   from a test.
+- **Time**: never wait on real time. Use the injectable
+  `sleep`/`monotonic` seams (`FakeClock` in
+  `tests/test_session_countdown.py`), patched `asyncio.sleep`, or an
+  injected clock; use fixed timezone-aware datetimes for date logic.
 - **Patch where used, not where defined**: if module A imports
   `helper` from module B, patch `A.helper` in tests targeting A —
-  not `B.helper`.
+  not `B.helper`. Bot code lives in `app.discord_bot.<module>`; patch
+  there.
 
 } //APM_RULES

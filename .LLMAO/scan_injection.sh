@@ -46,8 +46,10 @@ for p in "${PATTERNS[@]}"; do
     fi
 done
 
-# Search markdown files in the target directory
-MATCHES=$(grep -riEn "$GREP_PATTERN" "$TARGET_DIR" --include="*.md" --include="*.yaml" --include="*.json" 2>/dev/null || true)
+# Search markdown files in the target directory.
+# Skip archives/: closed APM sessions are frozen historical records
+# (they legitimately discuss the scanner's own keywords).
+MATCHES=$(grep -riEn "$GREP_PATTERN" "$TARGET_DIR" --include="*.md" --include="*.yaml" --include="*.json" --exclude-dir=archives 2>/dev/null || true)
 
 if [ -n "$MATCHES" ]; then
     echo "WARN: Potential prompt injection patterns found in $TARGET_DIR:"
