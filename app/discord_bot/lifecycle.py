@@ -8,7 +8,8 @@ import random
 
 import discord
 
-from app import voice
+from app import timer_format, voice
+from app.config import TEAMODE_TIMEZONE
 from app.constants import (
     AUTO_HANDOFF_ANNOUNCE,
     END_EMBED_BODY,
@@ -24,6 +25,9 @@ from app.constants import (
     REFLECT_EMBED_TITLE,
     SOLO_GRACE_ENDED,
     SOLO_GRACE_SECONDS,
+    VOICE_STATUS_CANCELLED,
+    VOICE_STATUS_EXPIRED,
+    VOICE_STATUS_FINISHED,
 )
 from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.views import (
@@ -32,6 +36,7 @@ from app.discord_bot.views import (
     _build_welcome_embed,
     _ChannelCleanup,
     _EditState,
+    _now,
     _SetupMessages,
 )
 from app.session import SessionRegistry, SessionState
@@ -60,11 +65,61 @@ class LifecycleMixin:
     _channel_cleanup: dict[int, _ChannelCleanup]
 
     # ------------------------------------------------------------------
+    # Voice channel status
+    # ------------------------------------------------------------------
+
+    async def _set_voice_status(
+        self, voice_channel_or_id: discord.VoiceChannel | int, status: str
+    ) -> None:
+        """Set *voice_channel_or_id*'s voice channel status to *status*.
+
+        Accepts either a resolved ``discord.VoiceChannel`` or a channel id
+        (resolved here via ``self.client.get_channel`` and narrowed to
+        ``VoiceChannel``). Never raises: a missing/non-voice channel, a
+        missing permission (``discord.Forbidden``), or any other
+        ``discord.HTTPException`` is logged at WARNING and swallowed so a
+        status update never breaks the session flow. A successful update is
+        logged at INFO.
+        """
+        if isinstance(voice_channel_or_id, discord.VoiceChannel):
+            channel = voice_channel_or_id
+        else:
+            resolved = self.client.get_channel(voice_channel_or_id)
+            if not isinstance(resolved, discord.VoiceChannel):
+                logger.warning(
+                    "Channel %s is not a VoiceChannel — skipping voice status %r",
+                    voice_channel_or_id,
+                    status,
+                )
+                return
+            channel = resolved
+
+        try:
+            await channel.edit(status=status)
+        except discord.Forbidden:
+            logger.warning(
+                "Missing permission to set voice status %r on channel %s",
+                status,
+                channel.id,
+            )
+            return
+        except discord.HTTPException:
+            logger.warning(
+                "Failed to set voice status %r on channel %s", status, channel.id
+            )
+            return
+        logger.info("Set voice status on channel %s to %r", channel.id, status)
+
+    # ------------------------------------------------------------------
     # Centralized terminal-state cleanup
     # ------------------------------------------------------------------
 
     async def _on_session_terminal(
-        self, session_id: int, *, delete_setup_messages: bool = True
+        self,
+        session_id: int,
+        *,
+        delete_setup_messages: bool = True,
+        voice_status: str | None = None,
     ) -> None:
         """Cancel/clear every per-session background task and in-memory
         state entry for *session_id*, and (usually) delete its setup
@@ -78,7 +133,20 @@ class LifecycleMixin:
         ``delete_setup_messages=False``. Idempotent: each pop is a no-op
         when the key is already gone, so callers that already did some of
         this cleanup themselves are safe to call it again.
+
+        ``voice_status``, when given, is set on the session's voice channel
+        (looked up via the registry, which still holds the session record
+        even though it has left the text-channel index) — used by the
+        cancelled and expired terminal paths. Completed and followup_timeout
+        pass no ``voice_status`` and leave the Finished status in place.
         """
+        if voice_status is not None:
+            session = self._registry.get(session_id)
+            if session is not None:
+                await self._set_voice_status(
+                    int(session.voice_channel_id), voice_status
+                )
+
         current = asyncio.current_task()
         for task_map in (
             self._pending_expiry_tasks,
@@ -193,7 +261,11 @@ class LifecycleMixin:
             session_id,
             sleep_seconds,
         )
-        await self._on_session_terminal(session_id, delete_setup_messages=False)
+        await self._on_session_terminal(
+            session_id,
+            delete_setup_messages=False,
+            voice_status=VOICE_STATUS_EXPIRED,
+        )
 
     async def _run_end_of_session(
         self,
@@ -242,6 +314,16 @@ class LifecycleMixin:
         end_message = await channel.send(
             content=mention_content, embed=session_complete_embed
         )
+
+        # Set the Finished voice status now that Time's up has posted.
+        session = self._registry.get(session_id)
+        if session is not None:
+            await self._set_voice_status(
+                int(session.voice_channel_id),
+                VOICE_STATUS_FINISHED.format(
+                    hhmm=timer_format.format_hhmm(_now(), TEAMODE_TIMEZONE)
+                ),
+            )
 
         # Remember this "Time's up" message so the *next* /teamode invoked
         # in the same text channel can delete it (see CommandsMixin —
@@ -565,4 +647,4 @@ class LifecycleMixin:
                 session_id,
             )
 
-        await self._on_session_terminal(session_id)
+        await self._on_session_terminal(session_id, voice_status=VOICE_STATUS_CANCELLED)

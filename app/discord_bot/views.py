@@ -39,6 +39,8 @@ from app.constants import (
     TIMER_FIELD_VALUE_MAX_LENGTH,
     TIMER_REMAINING,
     TIMER_TIME_RANGE,
+    VOICE_STATUS_CANCELLED,
+    VOICE_STATUS_TIMER,
     WELCOME_EMBED_DESCRIPTION,
     WELCOME_EMBED_TITLE,
 )
@@ -249,7 +251,15 @@ class _ModalBot(Protocol):
     ) -> None: ...
 
     async def _on_session_terminal(
-        self, session_id: int, *, delete_setup_messages: bool = True
+        self,
+        session_id: int,
+        *,
+        delete_setup_messages: bool = True,
+        voice_status: str | None = None,
+    ) -> None: ...
+
+    async def _set_voice_status(
+        self, voice_channel_or_id: discord.VoiceChannel | int, status: str
     ) -> None: ...
 
 
@@ -355,7 +365,9 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             logger.exception("Voice connect failed for session %s", self._session_id)
             await interaction.followup.send(MSG_VOICE_CONNECT_FAILED, ephemeral=True)
             self._bot._registry.mark_cancelled(session_id=self._session_id)
-            await self._bot._on_session_terminal(self._session_id)
+            await self._bot._on_session_terminal(
+                self._session_id, voice_status=VOICE_STATUS_CANCELLED
+            )
             return
 
         # Stash the voice client so the solo-grace flow can disconnect it.
@@ -364,6 +376,18 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         # --- Advance to ACTIVE and post the timer message ---
         self._bot._registry.mark_active(session_id=self._session_id)
         assert session.duration_minutes is not None
+
+        # Captured once, here, and reused by every tick edit so "Range"
+        # never drifts across the session, and by the Timer voice status
+        # set immediately below.
+        started_at = _now()
+        ends_at = started_at + timedelta(minutes=session.duration_minutes)
+        await self._bot._set_voice_status(
+            voice_channel,
+            VOICE_STATUS_TIMER.format(
+                hhmm=timer_format.format_hhmm(ends_at, TEAMODE_TIMEZONE)
+            ),
+        )
 
         # Snapshot the @-mention set for non-bot voice members — the same
         # filter used for the participant prompt — so the initial timer
@@ -376,9 +400,6 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         ]
         mention_line = " ".join(m.mention for m in mention_members)
 
-        # Captured once, here, and reused by every tick edit so "Range"
-        # never drifts across the session.
-        started_at = _now()
         initial_content, initial_embed = _build_timer_message(
             intention=session.intention,
             duration_minutes=session.duration_minutes,
@@ -475,7 +496,15 @@ class ViewsMixin:
         ) -> None: ...
 
         async def _on_session_terminal(
-            self, session_id: int, *, delete_setup_messages: bool = True
+            self,
+            session_id: int,
+            *,
+            delete_setup_messages: bool = True,
+            voice_status: str | None = None,
+        ) -> None: ...
+
+        async def _set_voice_status(
+            self, voice_channel_or_id: discord.VoiceChannel | int, status: str
         ) -> None: ...
 
     async def _handle_timer_pick(

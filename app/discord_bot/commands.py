@@ -26,6 +26,7 @@ from app.constants import (
     MSG_SESSION_ACTIVE,
     MSG_WRONG_CHANNEL,
     TEAMODE_COMMAND_DESCRIPTION,
+    VOICE_STATUS_STARTING,
     WELCOME_PROMPT_DELAY_SECONDS,
 )
 from app.discord_bot.views import (
@@ -57,6 +58,10 @@ class CommandsMixin:
         # Provided by LifecycleMixin — declared here, type-checking only,
         # so pyright can check this mixin's own methods in isolation.
         def _arm_pending_expiry(self, session_id: int) -> None: ...
+
+        async def _set_voice_status(
+            self, voice_channel_or_id: discord.VoiceChannel | int, status: str
+        ) -> None: ...
 
     def _register_command(self) -> None:
         """Register /teamode and /handoff on the global command tree.
@@ -174,6 +179,8 @@ class CommandsMixin:
             voice_channel_id=str(voice_state.channel.id),
             facilitator_id=str(interaction.user.id),
         )
+
+        await self._set_voice_status(interaction.channel, VOICE_STATUS_STARTING)
 
         # Clean up the previous session's leftover messages in this channel,
         # if any — this also covers a future "Go again" button reusing this
