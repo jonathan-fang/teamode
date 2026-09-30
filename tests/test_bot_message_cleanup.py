@@ -523,7 +523,7 @@ async def test_initial_timer_send_includes_non_bot_mentions(
         await modal.on_submit(inter)
 
     fake_voice_channel.send.assert_called_once()
-    sent_content: str = fake_voice_channel.send.call_args.args[0]
+    sent_content: str = fake_voice_channel.send.call_args.kwargs["content"]
     assert "<@501>" in sent_content
     assert "<@1>" not in sent_content
 

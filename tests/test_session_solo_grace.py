@@ -19,7 +19,7 @@ import discord
 import pytest
 
 from app.discord_bot import TeaModeBot
-from app.discord_bot.views import _EditState
+from app.discord_bot.views import COLORS, _EditState
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
 
@@ -122,9 +122,15 @@ def _make_fake_voice_client() -> MagicMock:
 
 
 def _make_edit_state(message: Any | None = None) -> _EditState:
-    """Build a fake _EditState with an AsyncMock message."""
+    """Build a fake _EditState with an AsyncMock message.
+
+    The message carries one real ``discord.Embed`` in ``.embeds`` (as a live
+    timer message would, from the initial ``_build_timer_message`` send) so
+    the solo-grace final-state edit can copy and recolor it.
+    """
     msg = message or AsyncMock(spec=discord.Message)
     msg.edit = AsyncMock()
+    msg.embeds = [discord.Embed(title="🍵 TeaMode • 25 min session")]
     return _EditState(message=msg)
 
 
@@ -163,10 +169,12 @@ async def test_solo_grace_timeout_cancels_session(
     # voice.disconnect was called with the fake voice client.
     mock_disconnect.assert_awaited_once_with(fake_vc)
 
-    # Timer message was rewritten.
-    edit_state.message.edit.assert_awaited_once_with(  # type: ignore[union-attr]
-        content="Session ended — facilitator did not return."
-    )
+    # Timer message was rewritten: content swapped, embed frozen but
+    # recolored muted red (no longer looks live).
+    edit_state.message.edit.assert_awaited_once()  # type: ignore[union-attr]
+    edit_call_kwargs = edit_state.message.edit.call_args.kwargs  # type: ignore[union-attr]
+    assert edit_call_kwargs["content"] == "Session ended — facilitator did not return."
+    assert edit_call_kwargs["embed"].color == COLORS["crashed"]
 
     # Session state in memory is CANCELLED.
     session = registry.get(sid)

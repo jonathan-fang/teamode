@@ -14,9 +14,16 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from app.constants import BACKOFF_FLOOR_CAP, BACKOFF_FLOOR_DEFAULT
+from app.constants import (
+    BACKOFF_FLOOR_CAP,
+    BACKOFF_FLOOR_DEFAULT,
+    MSG_WRAP_UP_NUDGE,
+    PHASE_DEEP_FOCUS,
+    TIMER_CONTENT,
+    WRAP_UP_MINUTES,
+)
 from app.discord_bot import TeaModeBot
-from app.discord_bot.views import _EditState
+from app.discord_bot.views import COLORS, _EditState
 from app.db import init_db
 from app.session import SessionRegistry
 
@@ -55,7 +62,7 @@ def _seed_active_session(
         facilitator_id="111",
     )
     session_id = session.session_id
-    registry.set_duration(session_id=session_id, duration_minutes=1)
+    registry.set_duration(session_id=session_id, duration_minutes=25)
     registry.set_intention(session_id=session_id, intention="test intention")
     registry.mark_active(session_id=session_id)
 
@@ -181,17 +188,21 @@ async def test_429_backoff_capped_at_maximum(
 
 @pytest.mark.asyncio
 async def test_edit_content_format(bot: TeaModeBot, registry: SessionRegistry) -> None:
-    """A successful edit sends the exact formatted timer string."""
+    """A successful edit sends the exact formatted timer content and embed."""
     session_id, fake_msg = _seed_active_session(registry, bot)
 
-    await bot._on_countdown_tick(session_id, seconds_remaining=30)
+    # 1200s remaining of a 25-min (1500s) session — well inside Deep focus
+    # (the 180s Wrap-up window starts at 180s remaining).
+    await bot._on_countdown_tick(session_id, seconds_remaining=1200)
 
     fake_msg.edit.assert_called_once()
     call_kwargs = fake_msg.edit.call_args.kwargs
-    assert (
-        call_kwargs["content"]
-        == "🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:30"
-    )
+    assert call_kwargs["content"] == TIMER_CONTENT.format(mmss="20:00")
+    embed = call_kwargs["embed"]
+    assert embed.color == COLORS["active"]
+    field_values = {f.name: f.value for f in embed.fields}
+    assert field_values["Intention"] == "test intention"
+    assert PHASE_DEEP_FOCUS in embed.description
     # AllowedMentions has no __eq__, so compare the flag that matters.
     assert call_kwargs["allowed_mentions"].users is False
 
@@ -200,15 +211,132 @@ async def test_edit_content_format(bot: TeaModeBot, registry: SessionRegistry) -
 async def test_edit_at_zero_sends_final_format(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
-    """The final tick at 0 edits the message to 00:00."""
+    """The final tick at 0 edits the message to 00:00, still in Wrap up."""
     session_id, fake_msg = _seed_active_session(registry, bot)
 
     await bot._on_countdown_tick(session_id, seconds_remaining=0)
 
     fake_msg.edit.assert_called_once()
     call_kwargs = fake_msg.edit.call_args.kwargs
-    assert (
-        call_kwargs["content"]
-        == "🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:00"
-    )
+    assert call_kwargs["content"] == TIMER_CONTENT.format(mmss="00:00")
+    embed = call_kwargs["embed"]
+    assert embed.color == COLORS["wrap_up"]
     assert call_kwargs["allowed_mentions"].users is False
+
+
+# ---------------------------------------------------------------------------
+# Wrap-up nudge
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_nudge_fires_once_at_trigger_for_long_session(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """A 25-min session posts the nudge exactly once, at the trigger second."""
+    session_id, fake_msg = _seed_active_session(registry, bot)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_msg.channel = fake_channel
+    trigger = WRAP_UP_MINUTES * 60
+
+    await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
+
+    fake_channel.send.assert_awaited_once_with(
+        MSG_WRAP_UP_NUDGE.format(minutes=WRAP_UP_MINUTES)
+    )
+
+    # A later tick (still ACTIVE) must not send it again.
+    fake_channel.send.reset_mock()
+    await bot._on_countdown_tick(session_id, seconds_remaining=trigger - 10)
+    fake_channel.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_nudge_never_fires_for_short_session(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """A 5-min session (below NUDGE_MIN_DURATION_MINUTES) never nudges."""
+    session = registry.create_pending_session(
+        guild_id="100",
+        text_channel_id="200",
+        voice_channel_id="300",
+        facilitator_id="111",
+    )
+    session_id = session.session_id
+    registry.set_duration(session_id=session_id, duration_minutes=5)
+    registry.set_intention(session_id=session_id, intention="x")
+    registry.mark_active(session_id=session_id)
+
+    fake_msg = AsyncMock(spec=discord.Message)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_msg.channel = fake_channel
+    bot._edit_states[session_id] = _EditState(message=fake_msg)
+
+    trigger = WRAP_UP_MINUTES * 60
+    for seconds_remaining in range(trigger + 20, -1, -1):
+        await bot._on_countdown_tick(session_id, seconds_remaining=seconds_remaining)
+
+    fake_channel.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_nudge_does_not_fire_when_session_no_longer_active(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """The nudge is skipped if the session has left ACTIVE by fire time
+    (e.g. cancelled via solo grace) even though the edit state lingers."""
+    session_id, fake_msg = _seed_active_session(registry, bot)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_msg.channel = fake_channel
+
+    registry.mark_cancelled(session_id=session_id)
+
+    trigger = WRAP_UP_MINUTES * 60
+    await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
+
+    fake_channel.send.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Facilitator field reflects handoff; intention truncation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_facilitator_field_shows_handoff_facilitator(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    session_id, fake_msg = _seed_active_session(registry, bot)
+    registry.mark_handoff(session_id=session_id, handoff_facilitator_id="222")
+
+    await bot._on_countdown_tick(session_id, seconds_remaining=1200)
+
+    embed = fake_msg.edit.call_args.kwargs["embed"]
+    field_values = {f.name: f.value for f in embed.fields}
+    assert field_values["Facilitator"] == "<@222>"
+
+
+@pytest.mark.asyncio
+async def test_long_intention_truncated_in_field(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    session = registry.create_pending_session(
+        guild_id="100",
+        text_channel_id="200",
+        voice_channel_id="300",
+        facilitator_id="111",
+    )
+    session_id = session.session_id
+    registry.set_duration(session_id=session_id, duration_minutes=25)
+    registry.set_intention(session_id=session_id, intention="x" * 3000)
+    registry.mark_active(session_id=session_id)
+
+    fake_msg = AsyncMock(spec=discord.Message)
+    bot._edit_states[session_id] = _EditState(message=fake_msg)
+
+    await bot._on_countdown_tick(session_id, seconds_remaining=1200)
+
+    embed = fake_msg.edit.call_args.kwargs["embed"]
+    field_values = {f.name: f.value for f in embed.fields}
+    assert len(field_values["Intention"]) <= 1024
+    assert field_values["Intention"].endswith("…")

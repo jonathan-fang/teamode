@@ -522,10 +522,19 @@ class LifecycleMixin:
                 # we're tearing the session down anyway.
                 pass
 
-        # 2) Rewrite the timer message.
+        # 2) Rewrite the timer message: freeze the last embed but recolor it
+        # muted red (COLORS["crashed"]) so it no longer looks live, and swap
+        # the content to the solo-grace-ended message — no further edits
+        # follow (the edit state is already popped above).
         if edit_state is not None:
+            frozen_embed: discord.Embed | None = None
+            if edit_state.message.embeds:
+                frozen_embed = edit_state.message.embeds[0].copy()
+                frozen_embed.color = COLORS["crashed"]
             try:
-                await edit_state.message.edit(content=SOLO_GRACE_ENDED)
+                await edit_state.message.edit(
+                    content=SOLO_GRACE_ENDED, embed=frozen_embed
+                )
             except discord.HTTPException:
                 logger.exception(
                     "Failed to edit timer message on solo-grace timeout for session %s",
