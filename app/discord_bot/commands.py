@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 
 from app.constants import (
+    GUILD_DAILY_CAP,
     HANDOFF_ANNOUNCE,
     HANDOFF_COMMAND_DESCRIPTION,
     HANDOFF_MEMBER_DESCRIPTION,
@@ -19,12 +20,15 @@ from app.constants import (
     MSG_HANDOFF_TARGET_NOT_IN_VOICE,
     MSG_NOT_IN_VOICE,
     MSG_PARTICIPANT_PROMPT,
+    MSG_RATE_LIMIT_GUILD,
+    MSG_RATE_LIMIT_USER,
     MSG_SESSION_ACTIVE,
     MSG_WRONG_CHANNEL,
     TEAMODE_COMMAND_DESCRIPTION,
     WELCOME_PROMPT_DELAY_SECONDS,
 )
 from app.discord_bot.views import COLORS, _build_timer_view, _build_welcome_embed
+from app.rate_limit import RateLimiter
 from app.session import SessionRegistry
 
 logger = logging.getLogger(__name__)
@@ -38,6 +42,7 @@ class CommandsMixin:
     client: discord.Client
     tree: app_commands.CommandTree
     _registry: SessionRegistry
+    _rate_limiter: RateLimiter
 
     def _register_command(self) -> None:
         """Register /teamode and /handoff on the global command tree.
@@ -64,7 +69,16 @@ class CommandsMixin:
             await self._handle_handoff(interaction, member)
 
     async def _handle_teamode(self, interaction: discord.Interaction) -> None:
-        """Cumulative invocation guard → create session → post welcome embed."""
+        """The /teamode slash command — delegates to the shared session start."""
+        await self._start_session(interaction)
+
+    async def _start_session(self, interaction: discord.Interaction) -> None:
+        """Cumulative invocation guard → rate limit → create session → post welcome.
+
+        Shared by the /teamode slash command and (in a later Task) a
+        "Go again" button — accepts any ``discord.Interaction`` and whoever
+        triggers it becomes facilitator.
+        """
 
         # Guard 1 — must be invoked from a voice channel's text chat.
         # In discord.py, a voice channel's text-chat surface shares the
@@ -100,6 +114,37 @@ class CommandsMixin:
         if existing is not None:
             embed = discord.Embed(
                 description=MSG_SESSION_ACTIVE,
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Rate limit — only invocations that passed the guards above count,
+        # so a mistyped channel or an absent voice join doesn't burn the
+        # allowance. Per-user check runs before per-guild (see RateLimiter
+        # docstring); a refusal at either stage creates no session row.
+        rate_result = self._rate_limiter.check_and_record(
+            user_id=str(interaction.user.id),
+            guild_id=str(interaction.guild_id),
+        )
+        if not rate_result.allowed:
+            if rate_result.reason == "user":
+                logger.info(
+                    "Rate limit refusal (user) — user_id=%s retry_after=%s",
+                    interaction.user.id,
+                    rate_result.retry_after_seconds,
+                )
+                description = MSG_RATE_LIMIT_USER.format(
+                    seconds=rate_result.retry_after_seconds
+                )
+            else:
+                logger.info(
+                    "Rate limit refusal (guild) — guild_id=%s",
+                    interaction.guild_id,
+                )
+                description = MSG_RATE_LIMIT_GUILD.format(cap=GUILD_DAILY_CAP)
+            embed = discord.Embed(
+                description=description,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
