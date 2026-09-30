@@ -7,22 +7,6 @@ This file is the inbox + holding pen for ideas that aren't in flight.
 The active project work is tracked in `.apm/plan.md` once Work
 Breakdown is complete — not here.
 
-- run it by megan if they're interested in me testing out my discord bot? plan for hosting would be a free aws thing or something, and atm i can run it from my pc to test it out and see if people like it? i've been using it for a month, so say like early june or something, been using it for 2-3 weeks now. from May 10, 2026
-
-- **Intention text privacy:** Before deploying to Groove Boogaloo, add option
-  to not persist intention text to the database unless `interaction.user.id`
-  matches a configured allowlist (e.g. developer account). Keeps personal
-  intentions private for non-developer users.
-
-- **Data anonymization question:** The current DB stores `facilitator_id`
-  (Discord user ID) on every session row, with an index on it. Before
-  deployment, decide: is it possible to strip or hash user IDs and still get
-  meaningful aggregate stats (session counts, durations, emoji outcomes)?
-  Or does linking sessions to a user ID add value (e.g. repeat-user tracking)
-  that justifies keeping it? If stripping is viable, consider a separate
-  aggregated stats table and dropping `facilitator_id` from what gets retained
-  long-term.
-
 ---
 
 ## Next Patch
@@ -37,66 +21,110 @@ Breakdown is complete — not here.
   stale (process dead), overwrite and continue. Remove the file via `atexit` on
   clean shutdown. No new dependencies.
 
-~~why does it die on 35:10 on timer with edited-messages-bug.png?~~
-Fixed in `app/bot.py` `IntentionModal.on_submit`: swapped `interaction.followup.send(wait=True)`
-(returns a `WebhookMessage` whose edit token expires after 15 min) for
-`cast(discord.VoiceChannel, interaction.channel).send()` (regular `Message`, no expiry).
-Needs smoke test: run a 5-min session, confirm no `HTTP 40x editing timer message` warnings.
-
-### Groove Boogaloo pre-deployment checklist
-
-Items to investigate and resolve before deploying to the Groove Boogaloo
-testing server. See `docs/groove-boogaloo-deployment.md` for admin context.
+- **Tunables constants file.** Add `app/constants.py` holding the numbers
+  that currently require a code change to adjust: allowed durations
+  (`5, 10, 25, 50`), per-user rate-limit window/allowance/daily cap, and
+  the wrap-up-nudge trigger time. Everything below that references a
+  "configurable" number pulls from this file.
 
 - **Per-user rate limiting (Option C).** Sliding 5-minute window per user:
   allow the first 2 invocations freely, block on the 3rd+ until the window
   clears. Ephemeral error message shows how many seconds remain. Combined with
   a per-guild daily cap of 50 invocations (resets at midnight, in-memory).
   Both checks happen at the top of the `/teamode` handler before session logic.
-  No new dependencies. Approved approach — implement before Groove deployment.
+  No new dependencies. Approved approach. Numbers (window, allowance, cap)
+  live in the constants file above.
 
-- **Intention text privacy.** Currently saved unconditionally. Decide and
-  implement before deployment: either restrict persistence to a developer
-  allowlist (`interaction.user.id` check), make it opt-in, or strip it
-  entirely for non-developer accounts. See inbox item above for detail.
+- **`ffmpeg` startup probe.** At bot startup, run `shutil.which("ffmpeg")`;
+  if `None`, emit a WARNING log line: `"ffmpeg not found on PATH — reverie
+  playback will fail. Install ffmpeg before starting a session."`
+  Non-fatal — the bot still starts. Also add a setup-step note in the
+  README's Requirements section pointing to the install line. **Same
+  README touch-up should also document `TEAMODE_DEV_GUILD_ID`** (comma-
+  separated guild IDs for guild-scoped command sync — currently only in
+  `app/config.py` comments, missing from README's Configure section) so
+  it doesn't get lost as a separate task. Rationale: caught the hard way
+  during T4.2 smoke testing — without ffmpeg,
+  `FFmpegPCMAudio` raises and the helper short-circuits to disconnect, so
+  the Reflect embed posts immediately and the bot appears to skip reverie
+  silently.
 
-- **Data anonymization / user ID decision.** Two user IDs are stored:
-  `facilitator_id` and `handoff_facilitator_id`. Decide whether to retain,
-  hash, or strip them before deployment. Aggregate stats (counts, durations,
-  emoji outcomes) may not require linking to a specific user. See inbox item
-  above for detail.
+- **Wrap-up nudge for longer sessions.** For sessions with duration ≥ 20
+  minutes only, post a one-time channel message when N minutes remain
+  (default 3, configurable in the constants file — was previously
+  considered as a flat 5-minute nudge for all durations, narrowed to
+  long-sessions-only + configurable trigger). Edge cases: don't fire if
+  `mark_cancelled` happened first; guard against durations shorter than
+  the trigger time.
 
-- **`ffmpeg` startup probe.** Without `ffmpeg` on PATH, the reverie chime
-  silently fails and the bot disconnects mid-session with no user-facing
-  error. Add a `shutil.which("ffmpeg")` check at startup with a WARNING log.
-  Non-fatal — bot still starts, but the operator knows immediately. See
-  v1.x section below for implementation notes.
+- **Add mentions to the active timer message.** Not yet implemented —
+  confirmed via code read that `_ACTIVE_TIMER_FMT` (`app/bot.py`) has no
+  mentions. Match the same `@`-mention set used in the `[Set Intention]`
+  prompt (`app/bot.py:909`), appended after the facilitator's intention
+  line.
 
-- **Investigate: legal requirements for accepting donations (Ko-fi / Patreon
-  / PayPal).** If hosting ever moves off a personal PC and costs arise, is
-  it legal to accept voluntary contributions for a personal open-source-
-  adjacent project without a formal business entity? Questions to answer:
-  - Is donation income taxable in your jurisdiction? (Almost certainly yes
-    in the US — treated as self-employment or miscellaneous income above
-    the de minimis threshold.)
-  - Do Ko-fi / Patreon / PayPal require a business account, or is a personal
-    account sufficient for small voluntary contributions?
-  - PayPal: viable for international contributors; personal account works up
-    to certain volume thresholds before triggering reporting requirements.
-  - Ko-fi: takes 0% on the free tier (platform-funded by their own Pro
-    subscriptions); low friction for one-time micro-donations.
-  - Patreon: takes 5–12% platform fee; better for recurring subscriptions
-    than one-off cost recovery.
-  - Nothing to act on now — file this for if/when a real cost appears.
+- **Delete welcome/set-intention messages after session ends.** After a
+  session completes or goes incomplete, delete the "now entering TeaMode"
+  welcome message and the `[Set Intention]` prompt to avoid cluttering the
+  channel's text chat.
+
+### Groove Boogaloo pre-deployment checklist
+
+Items to investigate and resolve before deploying to the Groove Boogaloo
+testing server. See `docs/groove-boogaloo-deployment.md` for admin context.
+Per-user rate limiting and the `ffmpeg` probe above are part of this
+checklist. Intention text privacy and data anonymization were also
+originally scoped here — see `docs/external-interest-log.md` for why
+they're postponed.
 
 ---
 
 ## Next Minor
 
-_V1 work is tracked in `.apm/plan.md` once the Planner approves it.
-This section will populate after V1 ships._
+- **Voice channel status updates.** discord.py supports this
+  (`VoiceChannel.edit(status=...)`, confirmed against the installed
+  library — requires the "Set Voice Channel Status" permission). Three
+  states over a session's lifecycle:
+  - On `/teamode` launch: `"🍵 Starting TeaMode"` (emoji prefix).
+  - Once the timer is set: `"to HH:MM"` — the wall-clock time the
+    session/regroup completes, 24-hour format, in the facilitator's
+    timezone (need to figure out where that's read from; default to
+    Pacific if unset).
+  - On completion: `"Finished TeaMode at HH:MM"`.
+  Supersedes the older "rename to HH:MM" note below with the fuller
+  three-state spec.
 
-- add like whatever time it says it will be done by regroup to the voice channel status line, rename it to HH:MM, where HH remains HH and MM is the minutes of when the timer would complete and all participants are called to regroup.
+- **Embed timer with progress bar and phase labels.** Replace the
+  plain-text active timer with a `discord.Embed`: title
+  (`🍵 TeaMode • <duration> min session`), `Intention`/`Facilitator`/
+  `Started at` fields, a phase label (`Deep focus` → `Wrap up — finish
+  your current task` for the last few minutes), and `MM:SS remaining`
+  plus an ASCII progress bar (`█████░░░░░ 50%`). Accent color matcha
+  sage `#7B9D6F`, shifting hue (e.g. oolong amber) for the wrap-up
+  phase. Inspired by `dlqa`'s `FocusTimerWidget`
+  (`~/WSL/.../dlqa/app/ui/widgets.py:173`). **Keep the plain `mm:ss`
+  text-edit path too** — this is additive, not a replacement.
+
+- **Chained sessions.** "Go again? / Take a 5-minute break?" prompt
+  after the follow-up answer.
+
+- **ASCII teacup banner on welcome.** Cute flourish, low effort.
+
+- **Custom avatar art.** Replace the placeholder avatar with a designed
+  teacup/kettle/steam image.
+
+- **`/teamode-stats` command.** Surface the SQLite log via a Discord
+  command instead of requiring the `sqlite3` CLI. Surface shape (embed?
+  CSV upload? graph?) still to be decided during implementation.
+
+- **Discord application identity assets — approved for creation.**
+  - Application icon: 1024×1024 PNG/JPG/GIF/WEBP, ≤ 10 MB, 1:1 aspect
+    ratio. Shown in the developer portal and as the bot user's avatar.
+    Align style with the matcha-sage / steeping-forest palette in
+    `.project-meta/UI-ADR.md`.
+  - Application banner: 680×240 PNG/JPG/GIF/WEBP, ≤ 10 MB, 17:6 aspect
+    ratio. Shown on the application's developer-portal page. Same style
+    direction as the icon.
 
 ---
 
@@ -111,71 +139,12 @@ _Empty._
 Valid ideas blocked on an external trigger or deferred until after V1
 ships. Promote to a release-target queue when ready.
 
-~~make it easier to launch from desktop the teamode thing with source teamode secrets and venv.~~
-Added `scripts/teamode_launcher.sh` (sources `~/.teamode-secrets`, activates venv, supports `dev`/`stable` modes) and `docs/windows-shortcut.md` with the wt.exe shortcut target.
-- after teamode completes or is incomplete, delete the [now entering teamode] and [set intention] message to avoid cluttering the discord text chat. 
-add the same mentions as the set intention block to the timer message after the facilitator's intention.
-- remove the time's up message 3 minutes after the session is completed.
-- can teamode set the channel status to indicate when regroup is?
-
-### v2 — sharing and reach
-
-- **Shareable to one external server.** README + token + slash command
-  registration walkthrough so a colleague can clone, configure, and
-  run on their own server within 30 minutes. Blocked on: V1 stable
-  for a week of real usage.
-- **VPS hosting path.** Deploy guide + systemd unit + secrets
-  handling for always-on operation. Blocked on: external server
-  onboarding.
-
-### v2 — participant capture
-
-The MVP keeps participant intentions and follow-ups social only — the
-bot prompts but does not log. Two capture options were discussed and
-deferred:
-
-- **Capture via chat-window listener.** Bot posts the participant
-  intention prompt and listens for chat messages from voice-channel
-  members during a 60-second window. Each message logged per-user.
-  Requires Message Content Intent (the gateway intent for reading
-  channel messages) and a participants table. Blocked on: deciding
-  whether the look-back data is actually useful.
-- **Capture via per-user modal.** Bot posts a "Share my intention"
-  button anyone in voice can click; each click opens a personal modal,
-  submissions logged per-user. No Message Content Intent needed.
-  Cleaner privacy story than the listener. Blocked on: same.
-
-### v2 — UX polish
-
-- **Embed with progress bar on the active timer.** Replace the plain
-  `mm:ss` text edit with a sage-accent embed that includes a unicode
-  progress bar (`▰▰▰▰▱▱▱▱▱▱`). Blocked on: confirming the edit
-  cadence behaves well at production load.
-- **Chained sessions.** "Go again? / Take a 5-minute break?" prompt
-  after the follow-up answer. Blocked on: V1 stable.
-- **ASCII teacup banner on welcome.** Cute flourish, low effort.
-  Blocked on: nothing — just deferred to keep V1 minimal.
-- **Custom avatar art.** Replace the placeholder avatar with a
-  designed teacup/kettle/steam image. Blocked on: someone making one.
-- **`/teamode-stats` command.** Surface the SQLite log via a Discord
-  command instead of requiring `sqlite3` CLI. Blocked on: deciding
-  what the surface looks like (embed? CSV upload? graph?).
-
 ### v2 — bookkeeping
 
 - **Participant snapshot at session start.** Record who was in the
   voice channel when the session started — useful for stats but adds
-  a Discord API call. Blocked on: capture-flow decision above.
-
-### v1.x — Discord application identity assets
-
-- **Application icon.** 1024×1024 PNG/JPG/GIF/WEBP, ≤ 10 MB, 1:1
-  aspect ratio. Shown in the developer portal and as the bot user's
-  avatar. No source asset yet; align style with the matcha-sage /
-  steeping-forest palette in `.project-meta/UI-ADR.md`.
-- **Application banner.** 680×240 PNG/JPG/GIF/WEBP, ≤ 10 MB, 17:6
-  aspect ratio. Shown on the application's developer-portal page.
-  Same style direction as the icon.
+  a Discord API call. Blocked on: participant-capture decision (see
+  `docs/external-interest-log.md` — postponed).
 
 ### v1.x — code organization
 
@@ -187,49 +156,12 @@ deferred:
   in `AGENTS.md`, `.apm/plan.md`, `.apm/spec.md`. Defer until a real
   second integration creates the ambiguity.
 
-### v1.x — ffmpeg startup probe
+### Shelved
 
-- **Warn when ffmpeg is missing.** At bot startup, run
-  `shutil.which("ffmpeg")`; if `None`, emit a WARNING log line:
-  `"ffmpeg not found on PATH — reverie playback will fail. Install ffmpeg before starting a session."`
-  Non-fatal — the bot still starts. Also add a setup-step note in the
-  README's Requirements section pointing to the install line.
-  Rationale: caught the hard way during T4.2 smoke testing — without
-  ffmpeg, `FFmpegPCMAudio` raises and the helper short-circuits to
-  disconnect, so the Reflect embed posts immediately and the bot
-  appears to skip reverie silently.
-
-### v1.x — countdown wrap-up message
-
-- **Five-minute wrap-up nudge.** When the countdown reaches 300 s
-  remaining, post a one-time channel message: `⏳ Five minutes left
-  — start to wrap up your task. We're nearing the end of the session.`
-  Edge cases: don't fire if `mark_cancelled` happened first; sessions
-  shorter than 5 min (none in the 10/25/50 set, but worth a guard).
-  Could fold into V2 timer "phase label" instead — see below.
-
-### v2 — embed timer with progress and phase labels
-
-Inspired by `dlqa`'s `FocusTimerWidget` (`~/WSL/.../dlqa/app/ui/widgets.py:173`).
-Replace the plain-text active timer with a `discord.Embed` that
-renders four stacked sections per tick:
-
-1. **Title** — `🍵 TeaMode • <duration> min session`.
-2. **Embed fields** — `Intention`, `Facilitator`, `Started at`
-   (Discord renders these in a dedicated card layout, less squashed
-   than a one-liner edit).
-3. **Phase label** — a contextual line that the bot swaps based on
-   time remaining: `Deep focus` for the bulk of the session,
-   `Wrap up — finish your current task` for the last 3 minutes.
-   Unifies the v1.x wrap-up nudge above with the timer visual itself
-   (no separate channel message needed).
-4. **Countdown + progress** — `MM:SS remaining` plus an ASCII
-   progress bar (`█████░░░░░ 50%`). The "remaining" suffix is a
-   small UX win for clarity.
-
-Accent color: matcha sage `#7B9D6F` (active), shifts to a different
-hue (e.g. oolong amber) for the wrap-up phase. Mobile rendering wins
-because embeds get a dedicated card.
+- **Remove the "Time's up!" message 3 minutes after session completion.**
+  Shelved (not tied to external interest — just not a priority right
+  now). Revisit on its own merits later, independent of the external-
+  interest items in `docs/external-interest-log.md`.
 
 ---
 
@@ -239,4 +171,4 @@ Inbox for loose observations and monitoring items. Triage at the end
 of each release cycle. Items under the 7-day waiting period stay here
 until promoted.
 
-_Empty — pre-implementation._
+_Empty._

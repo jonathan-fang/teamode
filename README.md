@@ -197,5 +197,5 @@ References:
 
 ## License
 
-Unlicensed — all rights reserved. Personal project; not currently open
+All rights reserved. Personal project; not currently open
 for redistribution.

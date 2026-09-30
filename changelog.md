@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — since v26Q2.0.0
+
+### Fixed
+- **Timer message edit token expiry.** `IntentionModal.on_submit` now
+  uses `channel.send()` instead of `interaction.followup.send(wait=True)`
+  for the timer message, avoiding the 15-minute webhook-token expiry
+  that caused `HTTP 40x editing timer message` failures on longer
+  sessions.
+
+### Added
+- **`scripts/teamode_launcher.sh`** — sources `~/.teamode-secrets`,
+  activates the venv, supports `dev`/`stable` modes. Paired with
+  `docs/windows-shortcut.md` for a Windows Terminal desktop shortcut.
+
 ## v26Q2.0.0 — 2026-05-11
 
 The first shippable release of TeaMode. A facilitator can run a real
