@@ -14,7 +14,9 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from app.bot import TeaModeBot, _EditState, _BACKOFF_FLOOR_DEFAULT, _BACKOFF_FLOOR_CAP
+from app.discord_bot import TeaModeBot
+from app.discord_bot.timer import _BACKOFF_FLOOR_CAP
+from app.discord_bot.views import _BACKOFF_FLOOR_DEFAULT, _EditState
 from app.db import init_db
 from app.session import SessionRegistry
 

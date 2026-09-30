@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from app.bot import (
+from app.discord_bot import TeaModeBot
+from app.discord_bot.views import (
     IntentionModal,
-    TeaModeBot,
     _MSG_NOT_FACILITATOR,
     _MSG_VOICE_CONNECT_FAILED,
     _ACTIVE_TIMER_FMT,
@@ -244,9 +244,11 @@ async def test_modal_submit_records_intention_and_posts_timer(
             coro.close()  # type: ignore[union-attr]
 
     with (
-        patch("app.bot.voice.connect", return_value=fake_voice_client) as mock_connect,
         patch(
-            "app.bot.asyncio.create_task", side_effect=_close_coro
+            "app.discord_bot.views.voice.connect", return_value=fake_voice_client
+        ) as mock_connect,
+        patch(
+            "app.discord_bot.views.asyncio.create_task", side_effect=_close_coro
         ) as mock_create_task,
     ):
         await modal.on_submit(inter)
@@ -318,8 +320,8 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
     inter.followup = AsyncMock()
 
     with (
-        patch("app.bot.voice.connect", side_effect=Exception("no voice")),
-        patch("app.bot.asyncio.create_task") as mock_create_task,
+        patch("app.discord_bot.views.voice.connect", side_effect=Exception("no voice")),
+        patch("app.discord_bot.views.asyncio.create_task") as mock_create_task,
     ):
         await modal.on_submit(inter)
 

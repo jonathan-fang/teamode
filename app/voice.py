@@ -3,7 +3,7 @@
 This module is a thin shim over discord.py voice primitives so the rest of
 the codebase never imports ``discord.FFmpegPCMAudio`` directly.  All three
 public helpers propagate exceptions to the caller; the Discord-facing layer
-in ``app.bot`` is responsible for turning failures into user-visible
+in ``app.discord_bot`` is responsible for turning failures into user-visible
 responses.
 """
 
