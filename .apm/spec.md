@@ -82,7 +82,7 @@ The split preserves all existing runtime behavior. The module list may be adjust
 | `LONG_BREAK_MIN_SESSION_MINUTES` | `25` | Session length that counts toward the streak. |
 | `LONG_BREAK_STREAK` | `2` | Consecutive qualifying sessions before the long break is offered. |
 | `GO_AGAIN_TIMEOUT_SECONDS` | `180` | Post-break Go again button lifetime. |
-| `CLEAR_SCAN_LIMIT` | `200` | `/teamode-clear` history depth. |
+| `CLEAR_SCAN_LIMIT` | `800` | `/teamode-clear` history depth. |
 | `CLEAR_DELETE_INTERVAL_SECONDS` | `1.0` | Pause between `/teamode-clear` deletes (User request after the smoke test showed 429 retries). |
 | `FOLLOWUP_TIMEOUT_SECONDS` | `180` | Moved from `bot.py`. |
 | `SOLO_GRACE_SECONDS` | `300` | Moved from `bot.py`. |
