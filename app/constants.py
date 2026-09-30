@@ -226,8 +226,16 @@ STATS_SECTION_SERVER = "This server"
 STATS_ROW_7D = "Last 7 days"
 STATS_ROW_30D = "Last 30 days"
 STATS_ROW_ALL = "All time"
-STATS_ROW_VALUE = "{n} sessions · {minutes} min · {rate}% completed"
+# Row value per window. ``{sessions}`` is STATS_SESSIONS (or
+# STATS_SESSIONS_ONE for exactly 1); STATS_ROW_VALUE_NO_RATE is used when
+# there are no ✅/⛔ answers in the window (completion rate undefined).
+STATS_SESSIONS = "{n} sessions"
+STATS_SESSIONS_ONE = "1 session"
+STATS_ROW_VALUE = "{sessions} · {minutes} min · {rate}% completed"
+STATS_ROW_VALUE_NO_RATE = "{sessions} · {minutes} min · — completed"
+# Streak line is shown only when the streak is >= 1 day.
 STATS_STREAK = "🔥 Streak: {days} days"
+STATS_STREAK_ONE = "🔥 Streak: 1 day"
 STATS_EMPTY = "No sessions yet — run /teamode to start one."
 
 # ---------------------------------------------------------------------------
@@ -255,3 +263,5 @@ TEACUP_BANNER = (
     "   \\_____/\n"
     "  '-------'"
 )
+# Code-block wrapper placing TEACUP_BANNER at the top of the welcome embed.
+WELCOME_BANNER_BLOCK = "```\n{banner}\n```\n"

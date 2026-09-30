@@ -14,6 +14,7 @@ from app.discord_bot.breaks import BreakMixin, _BreakState, _ChainState
 from app.discord_bot.clear import ClearMixin
 from app.discord_bot.commands import CommandsMixin
 from app.discord_bot.lifecycle import LifecycleMixin
+from app.discord_bot.stats import StatsMixin
 from app.discord_bot.timer import TimerMixin
 from app.discord_bot.views import (
     ViewsMixin,
@@ -28,7 +29,13 @@ logger = logging.getLogger(__name__)
 
 
 class TeaModeBot(
-    CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin, BreakMixin, ClearMixin
+    CommandsMixin,
+    ViewsMixin,
+    TimerMixin,
+    LifecycleMixin,
+    BreakMixin,
+    ClearMixin,
+    StatsMixin,
 ):
     """Owns the Discord client, command tree, DB connection, and session registry.
 
@@ -136,6 +143,7 @@ class TeaModeBot(
         # Register the slash commands on this instance.
         self._register_command()
         self._register_clear_command()
+        self._register_stats_command()
 
     # ------------------------------------------------------------------
     # Event handlers
