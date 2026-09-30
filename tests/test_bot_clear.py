@@ -22,6 +22,7 @@ import pytest
 from app.constants import (
     BREAK_STARTED,
     CHAIN_PROMPT,
+    CLEAR_DELETE_INTERVAL_SECONDS,
     CLEAR_DONE,
     CLEAR_NO_PERMISSION,
     CLEAR_NOTHING,
@@ -46,6 +47,14 @@ from app.session import SessionRegistry
 BOT_USER_ID = 999
 OTHER_BOT_USER_ID = 888
 HUMAN_USER_ID = 777
+
+
+@pytest.fixture(autouse=True)
+def fake_sleep(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    # Never wait on real time between deletes.
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.discord_bot.clear.asyncio.sleep", sleep)
+    return sleep
 
 
 @pytest.fixture()
@@ -454,3 +463,20 @@ async def test_channel_cleanup_fields_cleared_for_deleted_ids(
     cleanup = bot._channel_cleanup[channel_id]
     assert cleanup.times_up_id is None
     assert cleanup.reflect_id is None
+
+
+@pytest.mark.asyncio
+async def test_deletes_are_paced_between_messages(
+    bot: TeaModeBot, fake_sleep: AsyncMock
+) -> None:
+    messages = [FakeMessage(i, content=CHAIN_PROMPT) for i in (1, 2, 3)]
+    channel = _make_channel(messages)
+    interaction = _make_clear_interaction(channel)
+
+    await bot._handle_clear(interaction)
+
+    # No wait before the first delete; one interval before each later one.
+    assert fake_sleep.await_count == 2
+    fake_sleep.assert_awaited_with(CLEAR_DELETE_INTERVAL_SECONDS)
+    for message in messages:
+        message.delete.assert_awaited_once()

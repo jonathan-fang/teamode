@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -10,6 +11,7 @@ from discord import app_commands
 from app.cleanup import is_delete_eligible
 from app.constants import (
     CLEAR_COMMAND_DESCRIPTION,
+    CLEAR_DELETE_INTERVAL_SECONDS,
     CLEAR_DONE,
     CLEAR_NO_PERMISSION,
     CLEAR_NOTHING,
@@ -135,6 +137,7 @@ class ClearMixin:
         # Only Ocha's own messages — other bots' messages are never touched.
         bot_id = self.client.user.id if self.client.user else None
         deleted_count = 0
+        attempted_delete = False
         async for message in channel.history(limit=CLEAR_SCAN_LIMIT):
             if bot_id is None or message.author.id != bot_id:
                 continue
@@ -147,6 +150,11 @@ class ClearMixin:
                 content=message.content, embed_titles=embed_titles
             ):
                 continue
+            # Pace deletes to stay under Discord's per-channel delete limit
+            # (~5 per 5 s) instead of relying on 429 retries.
+            if attempted_delete:
+                await asyncio.sleep(CLEAR_DELETE_INTERVAL_SECONDS)
+            attempted_delete = True
             try:
                 await message.delete()
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):

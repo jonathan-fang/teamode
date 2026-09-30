@@ -33,6 +33,7 @@ LONG_BREAK_MIN_SESSION_MINUTES = 25  # sessions this long count toward the strea
 LONG_BREAK_STREAK = 2  # chained qualifying sessions before the long break
 GO_AGAIN_TIMEOUT_SECONDS = 180
 CLEAR_SCAN_LIMIT = 200
+CLEAR_DELETE_INTERVAL_SECONDS = 1.0  # pause between deletes (~5 per 5 s per channel)
 
 FOLLOWUP_TIMEOUT_SECONDS = 180  # moved from app/discord_bot/lifecycle.py
 SOLO_GRACE_SECONDS = 300  # 300 moved from app/discord_bot/lifecycle.py
