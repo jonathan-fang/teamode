@@ -26,7 +26,6 @@ from app.constants import (
     SOLO_GRACE_ENDED,
     SOLO_GRACE_SECONDS,
     VOICE_STATUS_CANCELLED,
-    VOICE_STATUS_EXPIRED,
     VOICE_STATUS_FINISHED,
 )
 from app.discord_bot.tasks import spawn_logged
@@ -80,6 +79,13 @@ class LifecycleMixin:
         ``discord.HTTPException`` is logged at WARNING and swallowed so a
         status update never breaks the session flow. A successful update is
         logged at INFO.
+
+        Discord requires the **Manage Channels** permission to set a voice
+        channel's status when the bot is not connected to that channel; with
+        only **Set Voice Channel Status**, it can set the status only while
+        connected. Callers therefore only invoke this while Ocha is in the
+        voice channel (Timer on activation, Finished before disconnect,
+        Cancelled on solo-grace timeout before disconnecting).
         """
         if isinstance(voice_channel_or_id, discord.VoiceChannel):
             channel = voice_channel_or_id
@@ -119,7 +125,6 @@ class LifecycleMixin:
         session_id: int,
         *,
         delete_setup_messages: bool = True,
-        voice_status: str | None = None,
     ) -> None:
         """Cancel/clear every per-session background task and in-memory
         state entry for *session_id*, and (usually) delete its setup
@@ -134,19 +139,13 @@ class LifecycleMixin:
         when the key is already gone, so callers that already did some of
         this cleanup themselves are safe to call it again.
 
-        ``voice_status``, when given, is set on the session's voice channel
-        (looked up via the registry, which still holds the session record
-        even though it has left the text-channel index) — used by the
-        cancelled and expired terminal paths. Completed and followup_timeout
-        pass no ``voice_status`` and leave the Finished status in place.
+        Voice status is not set here: it can only be set while Ocha is
+        connected to the voice channel (see ``_set_voice_status``), and by
+        the time a session reaches a terminal state the bot has either
+        already disconnected or never connected. Callers that need a status
+        set on the way to a terminal state (Finished, solo-grace Cancelled)
+        set it themselves before disconnecting.
         """
-        if voice_status is not None:
-            session = self._registry.get(session_id)
-            if session is not None:
-                await self._set_voice_status(
-                    int(session.voice_channel_id), voice_status
-                )
-
         current = asyncio.current_task()
         for task_map in (
             self._pending_expiry_tasks,
@@ -264,7 +263,6 @@ class LifecycleMixin:
         await self._on_session_terminal(
             session_id,
             delete_setup_messages=False,
-            voice_status=VOICE_STATUS_EXPIRED,
         )
 
     async def _run_end_of_session(
@@ -628,7 +626,14 @@ class LifecycleMixin:
                     session_id,
                 )
 
-        # 3) Disconnect voice (no reverie).
+        # 3) Set the Cancelled voice status while still connected — Discord
+        # requires Manage Channels to set it after disconnecting.
+        if voice_client is not None and isinstance(
+            voice_client.channel, discord.VoiceChannel
+        ):
+            await self._set_voice_status(voice_client.channel, VOICE_STATUS_CANCELLED)
+
+        # 4) Disconnect voice (no reverie).
         if voice_client is not None:
             try:
                 await voice.disconnect(voice_client)
@@ -638,7 +643,7 @@ class LifecycleMixin:
                     session_id,
                 )
 
-        # 4) Write status='cancelled' to SQLite.
+        # 5) Write status='cancelled' to SQLite.
         try:
             self._registry.mark_cancelled(session_id=session_id)
         except Exception:
@@ -647,4 +652,4 @@ class LifecycleMixin:
                 session_id,
             )
 
-        await self._on_session_terminal(session_id, voice_status=VOICE_STATUS_CANCELLED)
+        await self._on_session_terminal(session_id)

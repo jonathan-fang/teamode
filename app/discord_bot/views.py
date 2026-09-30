@@ -39,7 +39,6 @@ from app.constants import (
     TIMER_FIELD_VALUE_MAX_LENGTH,
     TIMER_REMAINING,
     TIMER_TIME_RANGE,
-    VOICE_STATUS_CANCELLED,
     VOICE_STATUS_TIMER,
     WELCOME_EMBED_DESCRIPTION,
     WELCOME_EMBED_TITLE,
@@ -255,7 +254,6 @@ class _ModalBot(Protocol):
         session_id: int,
         *,
         delete_setup_messages: bool = True,
-        voice_status: str | None = None,
     ) -> None: ...
 
     async def _set_voice_status(
@@ -365,9 +363,10 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             logger.exception("Voice connect failed for session %s", self._session_id)
             await interaction.followup.send(MSG_VOICE_CONNECT_FAILED, ephemeral=True)
             self._bot._registry.mark_cancelled(session_id=self._session_id)
-            await self._bot._on_session_terminal(
-                self._session_id, voice_status=VOICE_STATUS_CANCELLED
-            )
+            # No voice status here: the bot never connected, and Discord
+            # requires Manage Channels to set a voice status while
+            # disconnected (see LifecycleMixin._set_voice_status).
+            await self._bot._on_session_terminal(self._session_id)
             return
 
         # Stash the voice client so the solo-grace flow can disconnect it.
@@ -500,7 +499,6 @@ class ViewsMixin:
             session_id: int,
             *,
             delete_setup_messages: bool = True,
-            voice_status: str | None = None,
         ) -> None: ...
 
         async def _set_voice_status(

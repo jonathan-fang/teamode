@@ -44,17 +44,11 @@ def main() -> None:
 
     # Reconciliation must run after init_db (table must exist) and before the
     # gateway starts (avoid racing a fresh /teamode invocation).
-    crashed_voice_channel_ids = db.reconcile_crashed_sessions(conn)
-    logger.info(
-        "Reconciled %d crashed session(s) on startup", len(crashed_voice_channel_ids)
-    )
+    crashed_count = db.reconcile_crashed_sessions(conn)
+    logger.info("Reconciled %d crashed session(s) on startup", crashed_count)
 
     registry = SessionRegistry(conn)
-    bot = TeaModeBot(
-        conn=conn,
-        registry=registry,
-        crashed_voice_channel_ids=crashed_voice_channel_ids,
-    )
+    bot = TeaModeBot(conn=conn, registry=registry)
     bot.run(DISCORD_BOT_TOKEN)
 
 

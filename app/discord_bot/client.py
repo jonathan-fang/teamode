@@ -10,7 +10,6 @@ import discord
 from discord import app_commands
 
 from app.config import TEAMODE_DEV_GUILD_IDS, TEAMODE_TIMEZONE
-from app.constants import VOICE_STATUS_CRASHED
 from app.discord_bot.commands import CommandsMixin
 from app.discord_bot.lifecycle import LifecycleMixin
 from app.discord_bot.timer import TimerMixin
@@ -37,15 +36,9 @@ class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin):
         self,
         conn: sqlite3.Connection,
         registry: SessionRegistry,
-        crashed_voice_channel_ids: list[str] | None = None,
     ) -> None:
         self._conn = conn
         self._registry = registry
-
-        # Voice channel ids reconciled as crashed at this startup — set to
-        # VOICE_STATUS_CRASHED once, on the first on_ready, then cleared so
-        # a later on_ready (after a gateway reconnect) does not re-apply it.
-        self._crashed_voice_channel_ids: list[str] = crashed_voice_channel_ids or []
 
         # Per-user sliding-window and per-guild daily-cap rate limiting for
         # /teamode invocations. In-memory only — resets on restart.
@@ -142,13 +135,6 @@ class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin):
                 "Set TEAMODE_DEV_GUILD_ID to your dev guild id for instant "
                 "command propagation."
             )
-
-        # One-time crashed-status reset for sessions reconciled at this
-        # startup. Cleared after applying so a later on_ready (e.g. after a
-        # gateway reconnect) never re-applies it.
-        for voice_channel_id in self._crashed_voice_channel_ids:
-            await self._set_voice_status(int(voice_channel_id), VOICE_STATUS_CRASHED)
-        self._crashed_voice_channel_ids = []
 
     async def on_interaction(self, interaction: discord.Interaction) -> None:
         """Route component interactions (button clicks, select menus, etc.).

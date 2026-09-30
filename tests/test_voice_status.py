@@ -4,15 +4,16 @@ Covers:
   - ``LifecycleMixin._set_voice_status``: resolves a VoiceChannel or channel
     id, edits the status, and swallows Forbidden/HTTPException with a
     WARNING (never raises).
-  - Launch sets Starting; activation sets Timer with the end HH:MM;
-    follow-up reached sets Finished with the current HH:MM; solo-grace and
-    voice-connect-failure cancellation set Cancelled; pending expiry sets
-    Expired.
+  - Activation sets Timer with the end HH:MM; follow-up reached sets
+    Finished with the current HH:MM (before reverie/disconnect);
+    solo-grace timeout sets Cancelled (before disconnecting).
   - Completed and followup_timeout do not touch the voice status (Finished
     stays).
-  - Startup crashed reconciliation sets Crashed once per affected channel on
-    the first ``on_ready``, and a second ``on_ready`` does not re-apply it;
-    a missing/non-voice channel is skipped with a WARNING.
+  - Voice status is set only while the bot is connected to the voice
+    channel: launch, pending expiry, voice-connect failure, and startup
+    reconciliation never call ``VoiceChannel.edit`` (Discord requires
+    Manage Channels to set a status while disconnected, which this project
+    does not request).
 """
 
 from __future__ import annotations
@@ -29,10 +30,7 @@ import pytest
 
 from app.constants import (
     VOICE_STATUS_CANCELLED,
-    VOICE_STATUS_CRASHED,
-    VOICE_STATUS_EXPIRED,
     VOICE_STATUS_FINISHED,
-    VOICE_STATUS_STARTING,
     VOICE_STATUS_TIMER,
 )
 from app.db import init_db
@@ -92,9 +90,9 @@ async def test_set_voice_status_edits_channel_and_logs_info(
     channel = _fake_voice_channel(123)
 
     with caplog.at_level(logging.INFO, logger="app.discord_bot.lifecycle"):
-        await bot._set_voice_status(channel, "🍵 Starting TeaMode")
+        await bot._set_voice_status(channel, "🍵 Timer set")
 
-    channel.edit.assert_awaited_once_with(status="🍵 Starting TeaMode")
+    channel.edit.assert_awaited_once_with(status="🍵 Timer set")
     assert any("Set voice status" in r.message for r in caplog.records)
 
 
@@ -170,15 +168,16 @@ async def test_set_voice_status_http_exception_logs_warning(
 
 
 # ---------------------------------------------------------------------------
-# Launch — Starting
+# Launch — no voice status (bot is not connected yet)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_launch_sets_starting_status(
+async def test_launch_does_not_set_voice_status(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
-    """/teamode invocation sets VOICE_STATUS_STARTING on the voice channel."""
+    """/teamode invocation never calls VoiceChannel.edit — the bot has not
+    connected to voice yet at this point."""
     channel = _fake_voice_channel(333)
 
     inter = AsyncMock()
@@ -204,7 +203,7 @@ async def test_launch_sets_starting_status(
     with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot._handle_teamode(inter)
 
-    channel.edit.assert_any_await(status=VOICE_STATUS_STARTING)
+    channel.edit.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -262,15 +261,16 @@ async def test_activation_sets_timer_status_with_end_hhmm(
 
 
 # ---------------------------------------------------------------------------
-# Voice-connect failure — Cancelled
+# Voice-connect failure — no voice status (bot never connected)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_voice_connect_failure_sets_cancelled_status(
+async def test_voice_connect_failure_does_not_set_voice_status(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
-    """A voice-connect failure sets VOICE_STATUS_CANCELLED via the terminal hook."""
+    """A voice-connect failure never calls VoiceChannel.edit — the bot
+    never connected to the channel."""
     session = registry.create_pending_session(
         guild_id="222",
         text_channel_id="333",
@@ -281,9 +281,6 @@ async def test_voice_connect_failure_sets_cancelled_status(
     registry.set_duration(session_id=sid, duration_minutes=10)
 
     fake_voice_channel = _fake_voice_channel(333)
-    # The Cancelled status is resolved via the terminal hook, from the
-    # session's voice_channel_id through client.get_channel — not the
-    # click-time channel reference passed to the modal.
     _install_fake_client(bot, MagicMock(return_value=fake_voice_channel))
     modal = IntentionModal(bot=bot, session_id=sid, voice_channel=fake_voice_channel)
     text_input = cast(
@@ -304,7 +301,7 @@ async def test_voice_connect_failure_sets_cancelled_status(
     session_after = registry.get(sid)
     assert session_after is not None
     assert session_after.state == SessionState.CANCELLED
-    fake_voice_channel.edit.assert_any_await(status=VOICE_STATUS_CANCELLED)
+    fake_voice_channel.edit.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +313,8 @@ async def test_voice_connect_failure_sets_cancelled_status(
 async def test_followup_sets_finished_status_with_current_hhmm(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
-    """After Time's up posts, VOICE_STATUS_FINISHED is set with the current HH:MM."""
+    """After Time's up posts, VOICE_STATUS_FINISHED is set with the current
+    HH:MM — before reverie playback and disconnect."""
     session = registry.create_pending_session(
         guild_id="222",
         text_channel_id="333",
@@ -345,10 +343,21 @@ async def test_followup_sets_finished_status_with_current_hhmm(
     fixed_now = datetime(2026, 1, 1, 3, 45, 0, tzinfo=timezone.utc)
     fixed_tz = timezone.utc
 
+    call_order: list[str] = []
+
+    async def _record_reverie(_voice_client: object) -> bool:
+        call_order.append("reverie")
+        return True
+
+    async def _record_edit(**kwargs: object) -> None:
+        call_order.append("edit")
+
+    fake_voice_channel.edit.side_effect = _record_edit
+
     with (
         patch(
             "app.discord_bot.lifecycle.voice.play_reverie_then_disconnect",
-            return_value=True,
+            side_effect=_record_reverie,
         ),
         patch("app.discord_bot.lifecycle._now", return_value=fixed_now),
         patch("app.discord_bot.lifecycle.TEAMODE_TIMEZONE", fixed_tz),
@@ -360,6 +369,8 @@ async def test_followup_sets_finished_status_with_current_hhmm(
     fake_voice_channel.edit.assert_any_await(
         status=VOICE_STATUS_FINISHED.format(hhmm="03:45")
     )
+    # The status edit happens before reverie playback/disconnect.
+    assert call_order == ["edit", "reverie"]
 
 
 @pytest.mark.asyncio
@@ -416,15 +427,16 @@ async def test_completed_reaction_does_not_change_voice_status(
 
 
 # ---------------------------------------------------------------------------
-# Solo grace — Cancelled
+# Solo grace — Cancelled (set before disconnect)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_solo_grace_timeout_sets_cancelled_status(
+async def test_solo_grace_timeout_sets_cancelled_status_before_disconnect(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
-    """Solo-grace timeout sets VOICE_STATUS_CANCELLED via the terminal hook."""
+    """Solo-grace timeout sets VOICE_STATUS_CANCELLED while still connected,
+    before disconnecting voice."""
     session = registry.create_pending_session(
         guild_id="222",
         text_channel_id="333",
@@ -437,24 +449,40 @@ async def test_solo_grace_timeout_sets_cancelled_status(
     registry.mark_active(session_id=sid)
 
     fake_voice_channel = _fake_voice_channel(444)
-    _install_fake_client(bot, MagicMock(return_value=fake_voice_channel))
+    fake_voice_client = MagicMock(spec=discord.VoiceClient)
+    fake_voice_client.channel = fake_voice_channel
+    bot._voice_clients[sid] = fake_voice_client
 
-    with patch("app.discord_bot.lifecycle.voice.disconnect", new_callable=AsyncMock):
+    call_order: list[str] = []
+
+    async def _record_edit(**kwargs: object) -> None:
+        call_order.append("edit")
+
+    fake_voice_channel.edit.side_effect = _record_edit
+
+    async def _record_disconnect(_voice_client: object) -> None:
+        call_order.append("disconnect")
+
+    with patch(
+        "app.discord_bot.lifecycle.voice.disconnect", side_effect=_record_disconnect
+    ):
         await bot._run_solo_grace(session_id=sid, sleep_seconds=0)
 
     fake_voice_channel.edit.assert_any_await(status=VOICE_STATUS_CANCELLED)
+    assert call_order == ["edit", "disconnect"]
 
 
 # ---------------------------------------------------------------------------
-# Pending expiry — Expired
+# Pending expiry — no voice status (bot never connected)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_pending_expiry_sets_expired_status(
+async def test_pending_expiry_does_not_set_voice_status(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
-    """Pending-session expiry sets VOICE_STATUS_EXPIRED via the terminal hook."""
+    """Pending-session expiry never calls VoiceChannel.edit — the bot never
+    connected to the voice channel for a session still in PENDING."""
     session = registry.create_pending_session(
         guild_id="222",
         text_channel_id="333",
@@ -473,42 +501,29 @@ async def test_pending_expiry_sets_expired_status(
 
     await bot._run_pending_expiry(session_id=sid, sleep_seconds=0)
 
-    fake_voice_channel.edit.assert_any_await(status=VOICE_STATUS_EXPIRED)
+    fake_voice_channel.edit.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
-# Startup crashed reset
+# Startup reconciliation — no voice status
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_on_ready_sets_crashed_status_once(
+async def test_on_ready_does_not_set_voice_status(
     conn: sqlite3.Connection, registry: SessionRegistry
 ) -> None:
-    """on_ready sets Crashed on each crashed channel once; a missing/non-voice
-    channel is skipped with WARNING; a second on_ready does not re-apply it."""
+    """on_ready never touches voice status — reconciliation only writes the
+    'crashed' status to SQLite (app.db.reconcile_crashed_sessions), it does
+    not resolve or edit any voice channel."""
     voice_channel = _fake_voice_channel(10)
-    text_channel = MagicMock(spec=discord.TextChannel)
-    text_channel.id = 20
 
     def _get_channel(channel_id: int) -> Any:
-        return {10: voice_channel, 20: text_channel}.get(channel_id)
+        return {10: voice_channel}.get(channel_id)
 
-    bot = TeaModeBot(
-        conn=conn,
-        registry=registry,
-        crashed_voice_channel_ids=["10", "20", "30"],
-    )
+    bot = TeaModeBot(conn=conn, registry=registry)
     _install_fake_client(bot, MagicMock(side_effect=_get_channel))
 
-    logger = logging.getLogger("app.discord_bot.lifecycle")
-    with patch.object(logger, "warning") as mock_warning:
-        await bot.on_ready()
-
-    voice_channel.edit.assert_awaited_once_with(status=VOICE_STATUS_CRASHED)
-    assert bot._crashed_voice_channel_ids == []
-    assert mock_warning.call_count == 2  # channel 20 (non-voice) and 30 (missing)
-
-    # Second on_ready (e.g. after a gateway reconnect) does not re-apply it.
     await bot.on_ready()
-    voice_channel.edit.assert_awaited_once_with(status=VOICE_STATUS_CRASHED)
+
+    voice_channel.edit.assert_not_awaited()
