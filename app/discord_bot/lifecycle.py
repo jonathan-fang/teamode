@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from typing import cast
 
 import discord
 
@@ -205,9 +204,16 @@ class LifecycleMixin:
                 followup_note=None,
             )
             channel = self.client.get_channel(int(session.text_channel_id))
-            if channel is not None:
-                await cast(discord.abc.Messageable, channel).send(
+            if isinstance(channel, discord.abc.Messageable):
+                await channel.send(
                     FOLLOWUP_WHY_PROMPT.format(facilitator_id=session.facilitator_id)
+                )
+            elif channel is not None:
+                logger.warning(
+                    "Channel %s for session %s is not sendable — "
+                    "skipping follow-up why prompt",
+                    session.text_channel_id,
+                    session_id,
                 )
 
     async def on_voice_state_update(
@@ -291,18 +297,25 @@ class LifecycleMixin:
 
         # Step 6 — Announce in the text channel.
         channel = self.client.get_channel(int(session.text_channel_id))
-        if channel is not None:
+        if isinstance(channel, discord.abc.Messageable):
             content = AUTO_HANDOFF_ANNOUNCE.format(
                 old_facilitator_id=old_facilitator_id,
                 new_facilitator_id=new_facilitator.id,
             )
             try:
-                await channel.send(content)  # type: ignore[union-attr]
+                await channel.send(content)
             except discord.HTTPException:
                 logger.exception(
                     "Failed to announce auto handoff for session %s",
                     session.session_id,
                 )
+        elif channel is not None:
+            logger.warning(
+                "Channel %s for session %s is not sendable — "
+                "skipping auto-handoff announcement",
+                session.text_channel_id,
+                session.session_id,
+            )
 
     async def _run_solo_grace(
         self,

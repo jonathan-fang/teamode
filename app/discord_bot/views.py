@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol
 
 import discord
 
@@ -33,9 +33,6 @@ from app.constants import (
     WELCOME_EMBED_TITLE,
 )
 from app.session import SessionRegistry
-
-if TYPE_CHECKING:
-    from app.discord_bot.client import TeaModeBot
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +84,41 @@ class _EditState:
 
 
 # ---------------------------------------------------------------------------
+# Structural bot shape needed by IntentionModal
+# ---------------------------------------------------------------------------
+
+
+class _ModalBot(Protocol):
+    """The slice of :class:`~app.discord_bot.client.TeaModeBot` that
+    :class:`IntentionModal` reads and mutates.
+
+    ``TeaModeBot`` is composed from mixins rather than a single class body,
+    so ``ViewsMixin`` (which owns ``_handle_timer_pick``) cannot import the
+    concrete ``TeaModeBot`` without a cycle. Typing ``IntentionModal.bot``
+    against this Protocol instead lets ``ViewsMixin`` pass ``self`` directly
+    — ``ViewsMixin`` structurally satisfies it once it declares the same
+    members below (see ``ViewsMixin``), no cast required.
+    """
+
+    _registry: SessionRegistry
+    _voice_clients: dict[int, discord.VoiceClient]
+    _edit_states: dict[int, _EditState]
+    _countdown_tasks: dict[int, asyncio.Task[None]]
+
+    async def _on_countdown_tick(
+        self, session_id: int, seconds_remaining: int
+    ) -> None: ...
+
+    async def _run_end_of_session(
+        self,
+        *,
+        session_id: int,
+        voice_client: discord.VoiceClient,
+        channel: discord.abc.Messageable | None,
+    ) -> None: ...
+
+
+# ---------------------------------------------------------------------------
 # IntentionModal
 # ---------------------------------------------------------------------------
 
@@ -110,7 +142,7 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
     def __init__(
         self,
         *,
-        bot: TeaModeBot,
+        bot: _ModalBot,
         session_id: int,
         voice_channel: discord.VoiceChannel,
     ) -> None:
@@ -127,10 +159,17 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         self._voice_channel = voice_channel
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        text_input = cast(
-            discord.ui.TextInput[discord.ui.Modal], self.intention_field.component
-        )
-        intention_text = text_input.value or ""
+        component = self.intention_field.component
+        if not isinstance(component, discord.ui.TextInput):
+            # Genuinely impossible given the class-level declaration above,
+            # but ``Label.component`` is typed as the broader ``Item`` —
+            # narrow defensively rather than trusting the declared shape.
+            logger.error(
+                "intention_field.component is not a TextInput: %r", type(component)
+            )
+            intention_text = ""
+        else:
+            intention_text = component.value or ""
         session = self._bot._registry.set_intention(
             session_id=self._session_id,
             intention=intention_text,
@@ -161,23 +200,32 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             mm=session.duration_minutes,
             ss=0,
         )
-        timer_message = await cast(discord.VoiceChannel, interaction.channel).send(
-            initial_content
-        )
+        # Send on the voice channel resolved at click-handler time — the same
+        # typed reference used to connect above, so no cast is needed here.
+        timer_message = await voice_channel.send(initial_content)
 
         # Stash edit state so the tick callback can reach it.
         self._bot._edit_states[self._session_id] = _EditState(message=timer_message)
 
         # --- Schedule countdown, then run the full end-of-session sequence ---
         session_id = self._session_id
-        # Capture the channel reference for the end-of-session messages.
-        # interaction.channel is a VoiceChannel here (enforced by the
-        # /teamode guard), which is Messageable. Cast to satisfy pyright.
-        channel = cast(discord.abc.Messageable | None, interaction.channel)
+        # The voice channel resolved at click-handler time is Messageable —
+        # reuse it for the end-of-session messages, same as the timer message.
+        channel: discord.abc.Messageable = voice_channel
 
         async def _run_and_followup() -> None:
+            duration_minutes = session.duration_minutes
+            if duration_minutes is None:
+                # Genuinely impossible at this point in the flow (duration is
+                # set before the intention modal opens), but abort cleanly
+                # rather than asserting inside a background task.
+                logger.error(
+                    "Session %s has no duration_minutes at countdown start",
+                    session_id,
+                )
+                return
             await session_module.run_countdown(
-                duration_minutes=session.duration_minutes,  # type: ignore[arg-type]
+                duration_minutes=duration_minutes,
                 on_tick=lambda s: self._bot._on_countdown_tick(session_id, s),
             )
             self._bot._registry.mark_followup(session_id=session_id)
@@ -204,9 +252,31 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
 class ViewsMixin:
     """Timer-pick button handling, mixed into :class:`TeaModeBot`."""
 
-    # Attribute provided by TeaModeBot.__init__ — declared here so pyright
-    # can type-check the mixin's own methods in isolation.
+    # Attributes provided by TeaModeBot.__init__ — declared here so pyright
+    # can type-check the mixin's own methods in isolation, and so `self`
+    # structurally satisfies `_ModalBot` when passed to IntentionModal
+    # (see `_ModalBot` above) without a cast.
     _registry: SessionRegistry
+    _voice_clients: dict[int, discord.VoiceClient]
+    _edit_states: dict[int, _EditState]
+    _countdown_tasks: dict[int, asyncio.Task[None]]
+
+    if TYPE_CHECKING:
+        # Methods provided by TimerMixin / LifecycleMixin at runtime — declared
+        # here, type-checking only, purely so `self` matches `_ModalBot`'s
+        # shape. Guarded by TYPE_CHECKING so this never shadows the real
+        # implementations at runtime (ViewsMixin precedes them in the MRO).
+        async def _on_countdown_tick(
+            self, session_id: int, seconds_remaining: int
+        ) -> None: ...
+
+        async def _run_end_of_session(
+            self,
+            *,
+            session_id: int,
+            voice_client: discord.VoiceClient,
+            channel: discord.abc.Messageable | None,
+        ) -> None: ...
 
     async def _handle_timer_pick(
         self,
@@ -269,7 +339,7 @@ class ViewsMixin:
         # enforced it.  The assert satisfies pyright's narrowing requirement.
         assert isinstance(interaction.channel, discord.VoiceChannel)
         modal = IntentionModal(
-            bot=cast("TeaModeBot", self),
+            bot=self,
             session_id=session_id,
             voice_channel=interaction.channel,
         )

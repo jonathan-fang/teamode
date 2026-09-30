@@ -394,7 +394,7 @@ async def test_facilitator_no_entry_marks_completed_0_and_posts_why(
 
     fake_client = _install_fake_client_user(bot, user_id=9)
 
-    fake_channel = AsyncMock()
+    fake_channel = AsyncMock(spec=discord.TextChannel)
     fake_client.get_channel = MagicMock(return_value=fake_channel)
 
     payload = FakeRawReactionActionEvent(

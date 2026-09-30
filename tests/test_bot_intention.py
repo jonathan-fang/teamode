@@ -260,11 +260,16 @@ async def test_modal_submit_records_intention_and_posts_timer(
     )
     text_input._value = "finish the changelog"
 
-    # Build a fake interaction for the modal submit.
+    # Build a fake interaction for the modal submit. In production,
+    # interaction.channel on a modal-submit interaction is the same voice
+    # channel the modal was opened from — wire the fake the same way so the
+    # test reflects reality (on_submit sends via the channel captured at
+    # click-handler time, not via interaction.channel).
     inter = AsyncMock()
     inter.response = AsyncMock()
+    inter.channel = fake_voice_channel
     fake_timer_msg = AsyncMock()
-    inter.channel.send = AsyncMock(return_value=fake_timer_msg)
+    fake_voice_channel.send = AsyncMock(return_value=fake_timer_msg)
 
     fake_voice_client = AsyncMock()
 

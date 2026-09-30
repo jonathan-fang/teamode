@@ -28,11 +28,9 @@ target-version = "py312"
 # explicit so future additions are visible in diffs.
 select = ["E4", "E7", "E9", "F"]
 
-# Staged for after the type-hint retrofit on app/ and teamode.py: turning
-# this on now would surface missing-annotation errors on existing code.
-# Once app/ is fully annotated, enable with:
-#   extend-select = ["ANN"]
-# and keep the tests/ exemption below.
+# app/ and teamode.py are fully annotated; ANN enforces missing type hints
+# on parameters and return types. tests/ stays exempt (see per-file-ignores).
+extend-select = ["ANN"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ANN"]

@@ -78,11 +78,8 @@ class CommandsMixin:
             return
 
         # Guard 2 — invoker must be in the voice channel.
-        voice_state = (
-            interaction.user.voice
-            if isinstance(interaction.user, discord.Member)
-            else None
-        )  # type: ignore[union-attr]
+        user = interaction.user
+        voice_state = user.voice if isinstance(user, discord.Member) else None
         user_in_voice = (
             voice_state is not None
             and voice_state.channel is not None
@@ -154,7 +151,7 @@ class CommandsMixin:
 
         # Guard 1 — Session must be active in this channel.
         session = self._registry.find_active_in_text_channel(
-            str(interaction.channel.id) if interaction.channel is not None else ""  # type: ignore[union-attr]
+            str(interaction.channel_id) if interaction.channel_id is not None else ""
         )
         if session is None:
             embed = discord.Embed(
@@ -193,7 +190,9 @@ class CommandsMixin:
 
         # Guard 5 — Target must be present in the voice channel.
         voice_channel = self.client.get_channel(int(session.voice_channel_id))
-        if voice_channel is None or member not in voice_channel.members:  # type: ignore[union-attr]
+        if not isinstance(voice_channel, discord.VoiceChannel) or member not in (
+            voice_channel.members
+        ):
             embed = discord.Embed(
                 description=MSG_HANDOFF_TARGET_NOT_IN_VOICE,
                 color=COLORS["refusal"],

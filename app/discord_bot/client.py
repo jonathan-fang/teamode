@@ -125,8 +125,13 @@ class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin):
         if interaction.type != discord.InteractionType.component:
             return
 
-        custom_id: str = interaction.data.get("custom_id", "")  # type: ignore[union-attr]
-        parts = custom_id.split(":")
+        data = interaction.data
+        if data is None:
+            return
+        raw_custom_id = data.get("custom_id")
+        if not isinstance(raw_custom_id, str):
+            return
+        parts = raw_custom_id.split(":")
 
         # Ignore non-teamode custom_ids (other bots, earlier code, etc.).
         if len(parts) < 3 or parts[0] != "teamode":
