@@ -25,7 +25,7 @@ RATE_LIMIT_WINDOW_SECONDS = 300
 RATE_LIMIT_ALLOWANCE = 3
 GUILD_DAILY_CAP = 50
 WRAP_UP_MINUTES = 3
-NUDGE_MIN_DURATION_MINUTES = 20
+NUDGE_MIN_DURATION_MINUTES = 10
 PENDING_TIMEOUT_SECONDS = 600  # 600
 BREAK_MINUTES = 5
 GO_AGAIN_TIMEOUT_SECONDS = 180
@@ -41,6 +41,7 @@ WELCOME_PROMPT_DELAY_SECONDS = 1.0  # moved from app/discord_bot/commands.py
 INTENTION_MAX_LENGTH = 4000  # moved from app/discord_bot/views.py
 
 PROGRESS_BAR_WIDTH = 10
+TIMER_FIELD_VALUE_MAX_LENGTH = 1024  # Discord embed field.value hard limit
 STATS_WINDOWS_DAYS: tuple[int, ...] = (7, 30)
 PID_FILE_PATH = "/tmp/teamode.pid"
 DEFAULT_TIMEZONE = "America/Los_Angeles"
@@ -126,12 +127,7 @@ MSG_VOICE_CONNECT_FAILED = "Could not join voice — session cancelled."
 # used for every stale button (timer pick, and any added later).
 MSG_SESSION_INACTIVE = "This session is no longer active."
 
-INTENTION_LINE_SET = "🍵 Facilitator's Intention: {intention}"
 INTENTION_LINE_UNSET = "🍵 No intention set"
-
-# Active timer message content, refreshed on each countdown tick. One
-# newline-separated line per segment: intention, duration, countdown.
-ACTIVE_TIMER_FMT = "{intention_line}\n{duration} min session\n⏳ {mm:02d}:{ss:02d}"
 
 # ---------------------------------------------------------------------------
 # Existing copy — end-of-session sequence (lifecycle.py)
