@@ -143,7 +143,7 @@ async def test_facilitator_leaves_with_others_triggers_rng_handoff(
     after = _make_voice_state(None)
 
     fake_client = _install_fake_client_user(bot, user_id=999)
-    fake_text_channel = AsyncMock()
+    fake_text_channel = AsyncMock(spec=discord.TextChannel)
     fake_client.get_channel = MagicMock(return_value=fake_text_channel)
 
     with patch("app.discord_bot.lifecycle.random.choice", return_value=other_member):
@@ -180,7 +180,7 @@ async def test_facilitator_leaves_alone_no_handoff(
     after = _make_voice_state(None)
 
     fake_client = _install_fake_client_user(bot, user_id=999)
-    fake_text_channel = AsyncMock()
+    fake_text_channel = AsyncMock(spec=discord.TextChannel)
     fake_client.get_channel = MagicMock(return_value=fake_text_channel)
 
     with patch("app.discord_bot.lifecycle.random.choice") as mock_choice:
@@ -214,7 +214,7 @@ async def test_non_facilitator_leaves_no_handoff(
     after = _make_voice_state(None)
 
     fake_client = _install_fake_client_user(bot, user_id=999)
-    fake_text_channel = AsyncMock()
+    fake_text_channel = AsyncMock(spec=discord.TextChannel)
     fake_client.get_channel = MagicMock(return_value=fake_text_channel)
 
     with patch("app.discord_bot.lifecycle.random.choice") as mock_choice:
@@ -249,7 +249,7 @@ async def test_member_switches_channels_treated_as_leave_for_source_channel(
     after = _make_voice_state(dest_channel)
 
     fake_client = _install_fake_client_user(bot, user_id=999)
-    fake_text_channel = AsyncMock()
+    fake_text_channel = AsyncMock(spec=discord.TextChannel)
     fake_client.get_channel = MagicMock(return_value=fake_text_channel)
 
     with patch("app.discord_bot.lifecycle.random.choice", return_value=other_member):
@@ -281,6 +281,7 @@ def _make_handoff_interaction(
     channel = MagicMock(spec=discord.TextChannel)
     channel.id = channel_id
     inter.channel = channel
+    inter.channel_id = channel_id
 
     inter.guild_id = guild_id
 

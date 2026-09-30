@@ -87,7 +87,13 @@ def insert_pending_session(
         ),
     )
     conn.commit()
-    return cur.lastrowid  # type: ignore[return-value]
+    if cur.lastrowid is None:
+        # An INSERT that yields no rowid is a real failure — sqlite3 always
+        # sets lastrowid for a successful single-row INSERT into a table
+        # with a rowid (which `sessions` is), so this indicates the insert
+        # did not happen as expected.
+        raise RuntimeError("INSERT into sessions did not yield a rowid")
+    return cur.lastrowid
 
 
 def update_duration(

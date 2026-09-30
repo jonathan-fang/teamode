@@ -6,21 +6,16 @@ import logging
 
 import discord
 
-from app.discord_bot.views import (
-    _ACTIVE_TIMER_FMT,
-    _BACKOFF_FLOOR_DEFAULT,
-    _EditState,
-    _format_intention_line,
+from app.constants import (
+    ACTIVE_TIMER_FMT,
+    BACKOFF_FLOOR_CAP,
+    BACKOFF_FLOOR_DEFAULT,
+    EDIT_INTERVAL_SECONDS,
 )
+from app.discord_bot.views import _EditState, _format_intention_line
 from app.session import SessionRegistry
 
 logger = logging.getLogger(__name__)
-
-# Edit cadence per UI-ADR § "Timer edit cadence".
-_EDIT_INTERVAL_SECONDS = 10
-
-# Backoff cap for 429 handling.
-_BACKOFF_FLOOR_CAP = 60.0
 
 
 class TimerMixin:
@@ -35,14 +30,14 @@ class TimerMixin:
         """Tick callback injected into ``run_countdown``.
 
         Fires every second.  Only attempts a Discord message edit on
-        ticks that are multiples of *_EDIT_INTERVAL_SECONDS* or on the
+        ticks that are multiples of *EDIT_INTERVAL_SECONDS* or on the
         final tick (``seconds_remaining == 0``).
 
         Skips the edit if the per-session lock is already held (a previous
         edit is still in flight).  Applies exponential backoff on HTTP 429.
         """
         # Only edit on 10-second boundaries and at zero.
-        if seconds_remaining % _EDIT_INTERVAL_SECONDS != 0 and seconds_remaining != 0:
+        if seconds_remaining % EDIT_INTERVAL_SECONDS != 0 and seconds_remaining != 0:
             return
 
         edit_state = self._edit_states.get(session_id)
@@ -66,7 +61,7 @@ class TimerMixin:
 
         async with edit_state.lock:
             mm, ss = divmod(seconds_remaining, 60)
-            content = _ACTIVE_TIMER_FMT.format(
+            content = ACTIVE_TIMER_FMT.format(
                 intention_line=_format_intention_line(session.intention),
                 duration=session.duration_minutes,
                 mm=mm,
@@ -75,12 +70,12 @@ class TimerMixin:
             try:
                 await edit_state.message.edit(content=content)
                 # Successful edit — decay backoff floor back to default.
-                edit_state.backoff_floor = _BACKOFF_FLOOR_DEFAULT
+                edit_state.backoff_floor = BACKOFF_FLOOR_DEFAULT
             except discord.HTTPException as exc:
                 if exc.status == 429:
                     # Rate limited — double the floor, respect the cap.
                     edit_state.backoff_floor = min(
-                        edit_state.backoff_floor * 2, _BACKOFF_FLOOR_CAP
+                        edit_state.backoff_floor * 2, BACKOFF_FLOOR_CAP
                     )
                     logger.warning(
                         "Rate limited on session %s timer edit; backoff floor now %.0fs",

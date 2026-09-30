@@ -9,14 +9,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from app.discord_bot import TeaModeBot
-from app.discord_bot.views import (
-    IntentionModal,
-    _MSG_NOT_FACILITATOR,
-    _MSG_VOICE_CONNECT_FAILED,
-    _ACTIVE_TIMER_FMT,
-    _format_intention_line,
+from app.constants import (
+    ACTIVE_TIMER_FMT,
+    MSG_NOT_FACILITATOR,
+    MSG_SESSION_INACTIVE,
+    MSG_VOICE_CONNECT_FAILED,
 )
+from app.discord_bot import TeaModeBot
+from app.discord_bot.views import IntentionModal, _format_intention_line
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
 
@@ -148,7 +148,7 @@ async def test_non_facilitator_click_sends_refusal(
     kwargs = inter.response.send_message.call_args.kwargs
     assert kwargs.get("ephemeral") is True
     embed: discord.Embed = kwargs["embed"]
-    assert embed.description == _MSG_NOT_FACILITATOR
+    assert embed.description == MSG_NOT_FACILITATOR
 
     # No modal, no duration change.
     inter.response.send_modal.assert_not_called()
@@ -175,10 +175,40 @@ async def test_stale_session_click_sends_refusal(bot: TeaModeBot) -> None:
     assert kwargs.get("ephemeral") is True
     # Not the facilitator message — a separate stale-session message.
     embed: discord.Embed = kwargs["embed"]
-    assert embed.description != _MSG_NOT_FACILITATOR
+    assert embed.description != MSG_NOT_FACILITATOR
     assert embed.description is not None
 
     inter.response.send_modal.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Duration not offered by the timer-pick buttons — refusal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invalid_duration_click_sends_refusal(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """A timer-pick custom_id with a duration outside DURATIONS_MINUTES is refused
+    and does not advance the session (no modal, no duration recorded)."""
+    session_id = _seed_session(registry, facilitator_id=111)
+    custom_id = f"teamode:{session_id}:timer:7"
+    inter = _make_component_interaction(custom_id, user_id=111)
+
+    await bot.on_interaction(inter)
+
+    inter.response.send_message.assert_called_once()
+    kwargs = inter.response.send_message.call_args.kwargs
+    assert kwargs.get("ephemeral") is True
+    embed: discord.Embed = kwargs["embed"]
+    assert embed.description == MSG_SESSION_INACTIVE
+
+    inter.response.send_modal.assert_not_called()
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.duration_minutes is None
 
 
 # ---------------------------------------------------------------------------
@@ -230,11 +260,16 @@ async def test_modal_submit_records_intention_and_posts_timer(
     )
     text_input._value = "finish the changelog"
 
-    # Build a fake interaction for the modal submit.
+    # Build a fake interaction for the modal submit. In production,
+    # interaction.channel on a modal-submit interaction is the same voice
+    # channel the modal was opened from — wire the fake the same way so the
+    # test reflects reality (on_submit sends via the channel captured at
+    # click-handler time, not via interaction.channel).
     inter = AsyncMock()
     inter.response = AsyncMock()
+    inter.channel = fake_voice_channel
     fake_timer_msg = AsyncMock()
-    inter.channel.send = AsyncMock(return_value=fake_timer_msg)
+    fake_voice_channel.send = AsyncMock(return_value=fake_timer_msg)
 
     fake_voice_client = AsyncMock()
 
@@ -273,7 +308,7 @@ async def test_modal_submit_records_intention_and_posts_timer(
     # Timer message sent via channel.send (not followup — avoids 15-min token expiry).
     assert inter.channel.send.call_count == 1
     timer_call = inter.channel.send.call_args_list[0]
-    expected_initial = _ACTIVE_TIMER_FMT.format(
+    expected_initial = ACTIVE_TIMER_FMT.format(
         intention_line=_format_intention_line("finish the changelog"),
         duration=25,
         mm=25,
@@ -335,7 +370,7 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
     # ephemeral voice-connect error.
     assert inter.followup.send.call_count == 1
     only_call = inter.followup.send.call_args_list[0]
-    assert only_call.args == (_MSG_VOICE_CONNECT_FAILED,)
+    assert only_call.args == (MSG_VOICE_CONNECT_FAILED,)
     assert only_call.kwargs.get("ephemeral") is True
 
     # No countdown task scheduled.

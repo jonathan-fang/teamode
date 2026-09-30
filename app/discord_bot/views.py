@@ -5,16 +5,34 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol
 
 import discord
 
 from app import session as session_module
 from app import voice
+from app.constants import (
+    ACTIVE_TIMER_FMT,
+    BACKOFF_FLOOR_DEFAULT,
+    COLOR_MATCHA_SAGE,
+    COLOR_MUTED_GREY,
+    COLOR_MUTED_RED,
+    COLOR_OOLONG_AMBER,
+    COLOR_STEEPING_FOREST,
+    DURATIONS_MINUTES,
+    INTENTION_FIELD_LABEL,
+    INTENTION_LINE_SET,
+    INTENTION_LINE_UNSET,
+    INTENTION_MAX_LENGTH,
+    INTENTION_MODAL_TITLE,
+    MSG_NOT_FACILITATOR,
+    MSG_SESSION_INACTIVE,
+    MSG_VOICE_CONNECT_FAILED,
+    TIMER_BUTTON_LABEL,
+    WELCOME_EMBED_DESCRIPTION,
+    WELCOME_EMBED_TITLE,
+)
 from app.session import SessionRegistry
-
-if TYPE_CHECKING:
-    from app.discord_bot.client import TeaModeBot
 
 logger = logging.getLogger(__name__)
 
@@ -23,24 +41,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 COLORS = {
-    "active": discord.Color.from_str("#7B9D6F"),  # Matcha sage
-    "end_of_session": discord.Color.from_str("#3F5E4A"),  # Steeping forest
-    "refusal": discord.Color.from_str("#8A8A8A"),  # Muted grey
-    "crashed": discord.Color.from_str("#A05A5A"),  # Muted red
-    "completed": discord.Color.from_str("#C97B53"),  # Oolong amber
+    "active": discord.Color.from_str(COLOR_MATCHA_SAGE),
+    "end_of_session": discord.Color.from_str(COLOR_STEEPING_FOREST),
+    "refusal": discord.Color.from_str(COLOR_MUTED_GREY),
+    "crashed": discord.Color.from_str(COLOR_MUTED_RED),
+    "completed": discord.Color.from_str(COLOR_OOLONG_AMBER),
 }
-
-# Verbatim from UI-ADR § "Authorization rules".
-_MSG_NOT_FACILITATOR = "Only the facilitator can answer."
-
-# Voice connect failure — ephemeral, short, clear.
-_MSG_VOICE_CONNECT_FAILED = "Could not join voice — session cancelled."
-
-# Active timer message format (two spaces between intention and timer per Spec).
-_ACTIVE_TIMER_FMT = "{intention_line}\n{duration} min session\n⏳ {mm:02d}:{ss:02d}"
-
-# Backoff limits for 429 handling.
-_BACKOFF_FLOOR_DEFAULT = 10.0
 
 
 def _format_timer(seconds_remaining: int) -> str:
@@ -55,8 +61,8 @@ def _format_intention_line(intention: str | None) -> str:
     Returns the placeholder when no intention was captured.
     """
     if intention and intention.strip():
-        return f"🍵 Facilitator's Intention: {intention}"
-    return "🍵 No intention set"
+        return INTENTION_LINE_SET.format(intention=intention)
+    return INTENTION_LINE_UNSET
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +80,42 @@ class _EditState:
 
     message: discord.Message
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    backoff_floor: float = _BACKOFF_FLOOR_DEFAULT
+    backoff_floor: float = BACKOFF_FLOOR_DEFAULT
+
+
+# ---------------------------------------------------------------------------
+# Structural bot shape needed by IntentionModal
+# ---------------------------------------------------------------------------
+
+
+class _ModalBot(Protocol):
+    """The slice of :class:`~app.discord_bot.client.TeaModeBot` that
+    :class:`IntentionModal` reads and mutates.
+
+    ``TeaModeBot`` is composed from mixins rather than a single class body,
+    so ``ViewsMixin`` (which owns ``_handle_timer_pick``) cannot import the
+    concrete ``TeaModeBot`` without a cycle. Typing ``IntentionModal.bot``
+    against this Protocol instead lets ``ViewsMixin`` pass ``self`` directly
+    — ``ViewsMixin`` structurally satisfies it once it declares the same
+    members below (see ``ViewsMixin``), no cast required.
+    """
+
+    _registry: SessionRegistry
+    _voice_clients: dict[int, discord.VoiceClient]
+    _edit_states: dict[int, _EditState]
+    _countdown_tasks: dict[int, asyncio.Task[None]]
+
+    async def _on_countdown_tick(
+        self, session_id: int, seconds_remaining: int
+    ) -> None: ...
+
+    async def _run_end_of_session(
+        self,
+        *,
+        session_id: int,
+        voice_client: discord.VoiceClient,
+        channel: discord.abc.Messageable | None,
+    ) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +123,7 @@ class _EditState:
 # ---------------------------------------------------------------------------
 
 
-class IntentionModal(discord.ui.Modal, title="Set your intention"):
+class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
     """Modal that captures the facilitator's session intention.
 
     Opened after a timer-pick button click.  On submit, records the
@@ -90,10 +131,10 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
     """
 
     intention_field: discord.ui.Label = discord.ui.Label(
-        text="What will you focus on?",
+        text=INTENTION_FIELD_LABEL,
         component=discord.ui.TextInput(
             style=discord.TextStyle.long,
-            max_length=4000,
+            max_length=INTENTION_MAX_LENGTH,
             required=False,
         ),
     )
@@ -101,7 +142,7 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
     def __init__(
         self,
         *,
-        bot: TeaModeBot,
+        bot: _ModalBot,
         session_id: int,
         voice_channel: discord.VoiceChannel,
     ) -> None:
@@ -118,10 +159,17 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         self._voice_channel = voice_channel
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        text_input = cast(
-            discord.ui.TextInput[discord.ui.Modal], self.intention_field.component
-        )
-        intention_text = text_input.value or ""
+        component = self.intention_field.component
+        if not isinstance(component, discord.ui.TextInput):
+            # Genuinely impossible given the class-level declaration above,
+            # but ``Label.component`` is typed as the broader ``Item`` —
+            # narrow defensively rather than trusting the declared shape.
+            logger.error(
+                "intention_field.component is not a TextInput: %r", type(component)
+            )
+            intention_text = ""
+        else:
+            intention_text = component.value or ""
         session = self._bot._registry.set_intention(
             session_id=self._session_id,
             intention=intention_text,
@@ -136,7 +184,7 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
             voice_client = await voice.connect(voice_channel)
         except Exception:
             logger.exception("Voice connect failed for session %s", self._session_id)
-            await interaction.followup.send(_MSG_VOICE_CONNECT_FAILED, ephemeral=True)
+            await interaction.followup.send(MSG_VOICE_CONNECT_FAILED, ephemeral=True)
             self._bot._registry.mark_cancelled(session_id=self._session_id)
             return
 
@@ -146,29 +194,38 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
         # --- Advance to ACTIVE and post the timer message ---
         self._bot._registry.mark_active(session_id=self._session_id)
         assert session.duration_minutes is not None
-        initial_content = _ACTIVE_TIMER_FMT.format(
+        initial_content = ACTIVE_TIMER_FMT.format(
             intention_line=_format_intention_line(session.intention),
             duration=session.duration_minutes,
             mm=session.duration_minutes,
             ss=0,
         )
-        timer_message = await cast(discord.VoiceChannel, interaction.channel).send(
-            initial_content
-        )
+        # Send on the voice channel resolved at click-handler time — the same
+        # typed reference used to connect above, so no cast is needed here.
+        timer_message = await voice_channel.send(initial_content)
 
         # Stash edit state so the tick callback can reach it.
         self._bot._edit_states[self._session_id] = _EditState(message=timer_message)
 
         # --- Schedule countdown, then run the full end-of-session sequence ---
         session_id = self._session_id
-        # Capture the channel reference for the end-of-session messages.
-        # interaction.channel is a VoiceChannel here (enforced by the
-        # /teamode guard), which is Messageable. Cast to satisfy pyright.
-        channel = cast(discord.abc.Messageable | None, interaction.channel)
+        # The voice channel resolved at click-handler time is Messageable —
+        # reuse it for the end-of-session messages, same as the timer message.
+        channel: discord.abc.Messageable = voice_channel
 
         async def _run_and_followup() -> None:
+            duration_minutes = session.duration_minutes
+            if duration_minutes is None:
+                # Genuinely impossible at this point in the flow (duration is
+                # set before the intention modal opens), but abort cleanly
+                # rather than asserting inside a background task.
+                logger.error(
+                    "Session %s has no duration_minutes at countdown start",
+                    session_id,
+                )
+                return
             await session_module.run_countdown(
-                duration_minutes=session.duration_minutes,  # type: ignore[arg-type]
+                duration_minutes=duration_minutes,
                 on_tick=lambda s: self._bot._on_countdown_tick(session_id, s),
             )
             self._bot._registry.mark_followup(session_id=session_id)
@@ -195,9 +252,31 @@ class IntentionModal(discord.ui.Modal, title="Set your intention"):
 class ViewsMixin:
     """Timer-pick button handling, mixed into :class:`TeaModeBot`."""
 
-    # Attribute provided by TeaModeBot.__init__ — declared here so pyright
-    # can type-check the mixin's own methods in isolation.
+    # Attributes provided by TeaModeBot.__init__ — declared here so pyright
+    # can type-check the mixin's own methods in isolation, and so `self`
+    # structurally satisfies `_ModalBot` when passed to IntentionModal
+    # (see `_ModalBot` above) without a cast.
     _registry: SessionRegistry
+    _voice_clients: dict[int, discord.VoiceClient]
+    _edit_states: dict[int, _EditState]
+    _countdown_tasks: dict[int, asyncio.Task[None]]
+
+    if TYPE_CHECKING:
+        # Methods provided by TimerMixin / LifecycleMixin at runtime — declared
+        # here, type-checking only, purely so `self` matches `_ModalBot`'s
+        # shape. Guarded by TYPE_CHECKING so this never shadows the real
+        # implementations at runtime (ViewsMixin precedes them in the MRO).
+        async def _on_countdown_tick(
+            self, session_id: int, seconds_remaining: int
+        ) -> None: ...
+
+        async def _run_end_of_session(
+            self,
+            *,
+            session_id: int,
+            voice_client: discord.VoiceClient,
+            channel: discord.abc.Messageable | None,
+        ) -> None: ...
 
     async def _handle_timer_pick(
         self,
@@ -209,7 +288,7 @@ class ViewsMixin:
         session = self._registry.get(session_id)
         if session is None:
             embed = discord.Embed(
-                description="This session is no longer active.",
+                description=MSG_SESSION_INACTIVE,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -217,7 +296,7 @@ class ViewsMixin:
 
         if str(interaction.user.id) != session.facilitator_id:
             embed = discord.Embed(
-                description=_MSG_NOT_FACILITATOR,
+                description=MSG_NOT_FACILITATOR,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -228,6 +307,16 @@ class ViewsMixin:
             duration_minutes = int(parts[3])
         except (IndexError, ValueError):
             logger.warning("Malformed timer custom_id: %r", ":".join(parts))
+            return
+
+        # Reject any duration not offered by the timer-pick buttons (e.g. a
+        # tampered or stale custom_id) — refuse without advancing state.
+        if duration_minutes not in DURATIONS_MINUTES:
+            embed = discord.Embed(
+                description=MSG_SESSION_INACTIVE,
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         self._registry.set_duration(
@@ -250,7 +339,7 @@ class ViewsMixin:
         # enforced it.  The assert satisfies pyright's narrowing requirement.
         assert isinstance(interaction.channel, discord.VoiceChannel)
         modal = IntentionModal(
-            bot=cast("TeaModeBot", self),
+            bot=self,
             session_id=session_id,
             voice_channel=interaction.channel,
         )
@@ -269,29 +358,23 @@ def _build_welcome_embed() -> discord.Embed:
     facilitator and prompts tea / desk / distractions check.
     """
     embed = discord.Embed(
-        title="🍵 Now Entering TeaMode",
-        description=(
-            "### Time for TeaMode!\n"
-            "### · Grab your tea (or water/beverage of your choice),\n"
-            "### · Clear your desk,\n"
-            "### · And silence all distractions (like phones, impromptu meetings).\n\n"
-            "### ⏳ **How long would you like to focus today?**"
-        ),
+        title=WELCOME_EMBED_TITLE,
+        description=WELCOME_EMBED_DESCRIPTION,
         color=COLORS["active"],
     )
     return embed
 
 
 def _build_timer_view(session_id: int) -> discord.ui.View:
-    """Build the 10 / 25 / 50 timer-pick button row for *session_id*.
+    """Build the duration timer-pick button row for *session_id*.
 
     Custom_ids follow UI-ADR § "Custom_id namespace":
     ``teamode:<session_id>:timer:<value>``.
     """
     view = discord.ui.View()
-    for minutes in (5, 10, 25, 50):
+    for minutes in DURATIONS_MINUTES:
         button: discord.ui.Button[discord.ui.View] = discord.ui.Button(
-            label=f"{minutes} min",
+            label=TIMER_BUTTON_LABEL.format(minutes=minutes),
             custom_id=f"teamode:{session_id}:timer:{minutes}",
             style=discord.ButtonStyle.secondary,
         )

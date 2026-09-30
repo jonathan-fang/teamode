@@ -21,8 +21,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
+from app.constants import END_EMBED_BODY, END_EMBED_TITLE
 from app.discord_bot import TeaModeBot
-from app.discord_bot.lifecycle import _END_EMBED_BODY, _END_EMBED_TITLE
 from app.discord_bot.views import COLORS
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
@@ -197,8 +197,8 @@ async def test_end_of_session_sequence_happy_path(
     assert "Time's up," in first_kwargs["content"]
     assert "embed" in first_kwargs
     embed: discord.Embed = first_kwargs["embed"]
-    assert embed.title == _END_EMBED_TITLE
-    assert embed.description == f"### {_END_EMBED_BODY}"
+    assert embed.title == END_EMBED_TITLE
+    assert embed.description == f"### {END_EMBED_BODY}"
     assert embed.color == COLORS["end_of_session"]
 
     # Call 1: Reflect embed with facilitator prompt.
@@ -394,7 +394,7 @@ async def test_facilitator_no_entry_marks_completed_0_and_posts_why(
 
     fake_client = _install_fake_client_user(bot, user_id=9)
 
-    fake_channel = AsyncMock()
+    fake_channel = AsyncMock(spec=discord.TextChannel)
     fake_client.get_channel = MagicMock(return_value=fake_channel)
 
     payload = FakeRawReactionActionEvent(

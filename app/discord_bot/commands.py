@@ -8,24 +8,26 @@ import logging
 import discord
 from discord import app_commands
 
+from app.constants import (
+    HANDOFF_ANNOUNCE,
+    HANDOFF_COMMAND_DESCRIPTION,
+    HANDOFF_MEMBER_DESCRIPTION,
+    MSG_HANDOFF_NO_SESSION,
+    MSG_HANDOFF_NOT_FACILITATOR,
+    MSG_HANDOFF_SELF,
+    MSG_HANDOFF_TARGET_BOT,
+    MSG_HANDOFF_TARGET_NOT_IN_VOICE,
+    MSG_NOT_IN_VOICE,
+    MSG_PARTICIPANT_PROMPT,
+    MSG_SESSION_ACTIVE,
+    MSG_WRONG_CHANNEL,
+    TEAMODE_COMMAND_DESCRIPTION,
+    WELCOME_PROMPT_DELAY_SECONDS,
+)
 from app.discord_bot.views import COLORS, _build_timer_view, _build_welcome_embed
 from app.session import SessionRegistry
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Guard refusal messages — verbatim from Spec § "Invocation guard"
-# ---------------------------------------------------------------------------
-
-_MSG_WRONG_CHANNEL = "Run `/teamode` from a voice channel's text chat."
-_MSG_NOT_IN_VOICE = "Join the voice channel first, then try again."
-_MSG_SESSION_ACTIVE = (
-    "A TeaMode session is already running in this channel"
-    " — please pick another text channel."
-)
-
-# Verbatim from Spec § "Participant flow".
-_MSG_PARTICIPANT_PROMPT = "🥅 **[Set Intention]** Please share your intention for this session in voice or type it in the chat."
 
 
 class CommandsMixin:
@@ -46,18 +48,16 @@ class CommandsMixin:
 
         @self.tree.command(
             name="teamode",
-            description="Start a TeaMode focus session in this voice channel.",
+            description=TEAMODE_COMMAND_DESCRIPTION,
         )
         async def teamode(interaction: discord.Interaction) -> None:
             await self._handle_teamode(interaction)
 
         @self.tree.command(
             name="handoff",
-            description="Transfer the facilitator role to another voice-channel member.",
+            description=HANDOFF_COMMAND_DESCRIPTION,
         )
-        @app_commands.describe(
-            member="The voice-channel member to make the new facilitator."
-        )
+        @app_commands.describe(member=HANDOFF_MEMBER_DESCRIPTION)
         async def handoff(
             interaction: discord.Interaction, member: discord.Member
         ) -> None:
@@ -71,18 +71,15 @@ class CommandsMixin:
         # VoiceChannel's channel id; interaction.channel is a VoiceChannel.
         if not isinstance(interaction.channel, discord.VoiceChannel):
             embed = discord.Embed(
-                description=_MSG_WRONG_CHANNEL,
+                description=MSG_WRONG_CHANNEL,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         # Guard 2 — invoker must be in the voice channel.
-        voice_state = (
-            interaction.user.voice
-            if isinstance(interaction.user, discord.Member)
-            else None
-        )  # type: ignore[union-attr]
+        user = interaction.user
+        voice_state = user.voice if isinstance(user, discord.Member) else None
         user_in_voice = (
             voice_state is not None
             and voice_state.channel is not None
@@ -90,7 +87,7 @@ class CommandsMixin:
         )
         if not user_in_voice:
             embed = discord.Embed(
-                description=_MSG_NOT_IN_VOICE,
+                description=MSG_NOT_IN_VOICE,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -102,7 +99,7 @@ class CommandsMixin:
         )
         if existing is not None:
             embed = discord.Embed(
-                description=_MSG_SESSION_ACTIVE,
+                description=MSG_SESSION_ACTIVE,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -127,8 +124,8 @@ class CommandsMixin:
 
         await interaction.response.send_message(embed=embed, view=view)
 
-        # Post the participant prompt 1 second after the welcome embed.
-        await asyncio.sleep(1.0)
+        # Post the participant prompt after the welcome embed.
+        await asyncio.sleep(WELCOME_PROMPT_DELAY_SECONDS)
 
         # Snapshot voice members, filter the bot itself.
         assert voice_state.channel is not None
@@ -137,13 +134,10 @@ class CommandsMixin:
             m for m in voice_state.channel.members if not m.bot and m.id != bot_id
         ]
         if members:
-            mentions = " ".join(m.mention for m in members)
-            participant_prompt = (
-                f"🥅 **[Set Intention]** {mentions} Please share your intention "
-                "for this session in voice or type it in the chat."
-            )
+            mentions_prefix = " ".join(m.mention for m in members) + " "
         else:
-            participant_prompt = _MSG_PARTICIPANT_PROMPT
+            mentions_prefix = ""
+        participant_prompt = MSG_PARTICIPANT_PROMPT.format(mentions=mentions_prefix)
         await interaction.followup.send(participant_prompt, ephemeral=False)
 
     async def _handle_handoff(
@@ -157,11 +151,11 @@ class CommandsMixin:
 
         # Guard 1 — Session must be active in this channel.
         session = self._registry.find_active_in_text_channel(
-            str(interaction.channel.id) if interaction.channel is not None else ""  # type: ignore[union-attr]
+            str(interaction.channel_id) if interaction.channel_id is not None else ""
         )
         if session is None:
             embed = discord.Embed(
-                description="No active TeaMode session in this channel.",
+                description=MSG_HANDOFF_NO_SESSION,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -170,7 +164,7 @@ class CommandsMixin:
         # Guard 2 — Invoker must be the current facilitator.
         if str(interaction.user.id) != session.facilitator_id:
             embed = discord.Embed(
-                description="Only the facilitator can hand off the role.",
+                description=MSG_HANDOFF_NOT_FACILITATOR,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -179,7 +173,7 @@ class CommandsMixin:
         # Guard 3 — Target must not be the invoker themselves.
         if member.id == interaction.user.id:
             embed = discord.Embed(
-                description="You are already the facilitator.",
+                description=MSG_HANDOFF_SELF,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -188,7 +182,7 @@ class CommandsMixin:
         # Guard 4 — Target must be a human (not a bot).
         if member.bot:
             embed = discord.Embed(
-                description="Pick a human voice-channel member.",
+                description=MSG_HANDOFF_TARGET_BOT,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -196,9 +190,11 @@ class CommandsMixin:
 
         # Guard 5 — Target must be present in the voice channel.
         voice_channel = self.client.get_channel(int(session.voice_channel_id))
-        if voice_channel is None or member not in voice_channel.members:  # type: ignore[union-attr]
+        if not isinstance(voice_channel, discord.VoiceChannel) or member not in (
+            voice_channel.members
+        ):
             embed = discord.Embed(
-                description="Target must be in the voice channel.",
+                description=MSG_HANDOFF_TARGET_NOT_IN_VOICE,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -213,9 +209,9 @@ class CommandsMixin:
             handoff_facilitator_id=str(member.id),
         )
 
-        content = (
-            f"<@{old_facilitator_id}> handed off — <@{member.id}>,"
-            " you're now the facilitator."
+        content = HANDOFF_ANNOUNCE.format(
+            old_facilitator_id=old_facilitator_id,
+            new_facilitator_id=member.id,
         )
         await interaction.response.send_message(
             content,

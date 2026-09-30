@@ -5,25 +5,28 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from typing import cast
 
 import discord
 
 from app import voice
+from app.constants import (
+    AUTO_HANDOFF_ANNOUNCE,
+    END_EMBED_BODY,
+    END_EMBED_TITLE,
+    END_OF_SESSION_MENTION,
+    END_OF_SESSION_NO_MENTION,
+    FOLLOWUP_PROMPT,
+    FOLLOWUP_TIMEOUT_SECONDS,
+    FOLLOWUP_WHY_PROMPT,
+    REFLECT_EMBED_DESCRIPTION,
+    REFLECT_EMBED_TITLE,
+    SOLO_GRACE_ENDED,
+    SOLO_GRACE_SECONDS,
+)
 from app.discord_bot.views import COLORS, _EditState
 from app.session import SessionRegistry
 
 logger = logging.getLogger(__name__)
-
-# End-of-session embed — canonical from UI-ADR § "End-of-session embed copy".
-_END_EMBED_TITLE = "✨ Session complete!"
-_END_EMBED_BODY = "🌿 Sip your tea, stretch, and notice your progress."
-
-# Follow-up timeout per Spec § "Edge Cases" (3-minute watchdog).
-_FOLLOWUP_TIMEOUT_SECONDS = 180
-
-# Solo-facilitator grace window: 5 minutes before auto-cancel.
-_SOLO_GRACE_SECONDS = 300
 
 
 class LifecycleMixin:
@@ -77,14 +80,14 @@ class LifecycleMixin:
 
         if members:
             mentions = " ".join(m.mention for m in members)
-            mention_content = f"Time's up, {mentions}!"
+            mention_content = END_OF_SESSION_MENTION.format(mentions=mentions)
         else:
-            mention_content = "Time's up!"
+            mention_content = END_OF_SESSION_NO_MENTION
 
         # Step b: Post Session-complete embed with the @-mention content.
         session_complete_embed = discord.Embed(
-            title=_END_EMBED_TITLE,
-            description=f"### {_END_EMBED_BODY}",
+            title=END_EMBED_TITLE,
+            description=f"### {END_EMBED_BODY}",
             color=COLORS["end_of_session"],
         )
         await channel.send(content=mention_content, embed=session_complete_embed)
@@ -95,15 +98,10 @@ class LifecycleMixin:
             logger.warning("Reverie playback failed for session %s", session_id)
 
         # Step d: Post Reflect message with facilitator prompt.
-        facilitator_prompt = "[Follow-up] React with ✅ if you finished, or ⛔ if not."
+        facilitator_prompt = FOLLOWUP_PROMPT
         reflect_embed = discord.Embed(
-            title="🌿 [Reflect]",
-            description=(
-                "### Share how your session went!\n"
-                "### · React with emoji\n"
-                "### · Share in voice\n"
-                "### · Or type in chat"
-            ),
+            title=REFLECT_EMBED_TITLE,
+            description=REFLECT_EMBED_DESCRIPTION,
             color=COLORS["end_of_session"],
         )
         reflect_msg = await channel.send(
@@ -120,7 +118,7 @@ class LifecycleMixin:
         # Step g: 3-minute watchdog.
         async def _watchdog() -> None:
             try:
-                await asyncio.sleep(_FOLLOWUP_TIMEOUT_SECONDS)
+                await asyncio.sleep(FOLLOWUP_TIMEOUT_SECONDS)
             except asyncio.CancelledError:
                 return
             # Watchdog fired — mark timeout and clean up.
@@ -206,10 +204,16 @@ class LifecycleMixin:
                 followup_note=None,
             )
             channel = self.client.get_channel(int(session.text_channel_id))
-            if channel is not None:
-                await cast(discord.abc.Messageable, channel).send(
-                    f"<@{session.facilitator_id}> — share what got in the way: "
-                    "type in chat or share in voice."
+            if isinstance(channel, discord.abc.Messageable):
+                await channel.send(
+                    FOLLOWUP_WHY_PROMPT.format(facilitator_id=session.facilitator_id)
+                )
+            elif channel is not None:
+                logger.warning(
+                    "Channel %s for session %s is not sendable — "
+                    "skipping follow-up why prompt",
+                    session.text_channel_id,
+                    session_id,
                 )
 
     async def on_voice_state_update(
@@ -293,24 +297,31 @@ class LifecycleMixin:
 
         # Step 6 — Announce in the text channel.
         channel = self.client.get_channel(int(session.text_channel_id))
-        if channel is not None:
-            content = (
-                f"<@{old_facilitator_id}> left — <@{new_facilitator.id}>,"
-                " you're now the facilitator."
+        if isinstance(channel, discord.abc.Messageable):
+            content = AUTO_HANDOFF_ANNOUNCE.format(
+                old_facilitator_id=old_facilitator_id,
+                new_facilitator_id=new_facilitator.id,
             )
             try:
-                await channel.send(content)  # type: ignore[union-attr]
+                await channel.send(content)
             except discord.HTTPException:
                 logger.exception(
                     "Failed to announce auto handoff for session %s",
                     session.session_id,
                 )
+        elif channel is not None:
+            logger.warning(
+                "Channel %s for session %s is not sendable — "
+                "skipping auto-handoff announcement",
+                session.text_channel_id,
+                session.session_id,
+            )
 
     async def _run_solo_grace(
         self,
         *,
         session_id: int,
-        sleep_seconds: float = _SOLO_GRACE_SECONDS,
+        sleep_seconds: float = SOLO_GRACE_SECONDS,
     ) -> None:
         """5-minute rejoin watchdog for solo facilitator-leave.
 
@@ -319,7 +330,7 @@ class LifecycleMixin:
         ``cancelled``: rewrites the timer message, cancels the countdown task,
         disconnects voice, and writes status='cancelled' to SQLite.
 
-        ``sleep_seconds`` defaults to ``_SOLO_GRACE_SECONDS``. Tests pass a
+        ``sleep_seconds`` defaults to ``SOLO_GRACE_SECONDS``. Tests pass a
         small value (e.g. 0 or 0.01) to exercise the timeout path without
         waiting 5 minutes.
         """
@@ -348,9 +359,7 @@ class LifecycleMixin:
         # 2) Rewrite the timer message.
         if edit_state is not None:
             try:
-                await edit_state.message.edit(
-                    content="Session ended — facilitator did not return."
-                )
+                await edit_state.message.edit(content=SOLO_GRACE_ENDED)
             except discord.HTTPException:
                 logger.exception(
                     "Failed to edit timer message on solo-grace timeout for session %s",

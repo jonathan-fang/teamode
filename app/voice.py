@@ -25,7 +25,17 @@ async def connect(voice_channel: discord.VoiceChannel) -> discord.VoiceClient:
     Propagates any exception raised by discord.py — the caller decides how to
     surface a connect failure to the user.
     """
-    return await voice_channel.connect()  # type: ignore[return-value]
+    vc = await voice_channel.connect(cls=discord.VoiceClient)
+    if not isinstance(vc, discord.VoiceClient):
+        # discord.py's overloads say connect(cls=discord.VoiceClient) always
+        # returns a discord.VoiceClient; this guards against a genuinely
+        # impossible state rather than trusting the overload blindly.
+        logger.warning(
+            "voice_channel.connect() returned unexpected client type: %r",
+            type(vc),
+        )
+        raise TypeError(f"Expected discord.VoiceClient, got {type(vc)!r}")
+    return vc
 
 
 def play_reverie(voice_client: discord.VoiceClient) -> None:

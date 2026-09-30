@@ -3,6 +3,7 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import discord
 import pytest
 
 from app.voice import (
@@ -23,7 +24,7 @@ from app.voice import (
 async def test_connect_calls_channel_connect_once() -> None:
     """connect() should call voice_channel.connect() exactly once and return
     its result."""
-    fake_client = MagicMock()
+    fake_client = MagicMock(spec=discord.VoiceClient)
     fake_channel = MagicMock()
     fake_channel.connect = AsyncMock(return_value=fake_client)
 
