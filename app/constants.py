@@ -19,14 +19,14 @@ from __future__ import annotations
 # Tunables
 # ---------------------------------------------------------------------------
 
-DURATIONS_MINUTES: tuple[int, ...] = (5, 10, 25, 50)
+DURATIONS_MINUTES: tuple[int, ...] = (5, 10, 25, 50)  # only allows int
 
 RATE_LIMIT_WINDOW_SECONDS = 300
 RATE_LIMIT_ALLOWANCE = 3
 GUILD_DAILY_CAP = 50
 WRAP_UP_MINUTES = 3
 NUDGE_MIN_DURATION_MINUTES = 20
-PENDING_TIMEOUT_SECONDS = 600
+PENDING_TIMEOUT_SECONDS = 600  # 600
 BREAK_MINUTES = 5
 GO_AGAIN_TIMEOUT_SECONDS = 180
 CLEAR_SCAN_LIMIT = 200
