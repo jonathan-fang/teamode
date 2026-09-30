@@ -32,6 +32,7 @@ from app.discord_bot.views import (
     COLORS,
     _build_timer_view,
     _build_welcome_embed,
+    _ChannelCleanup,
     _SetupMessages,
 )
 from app.rate_limit import RateLimiter
@@ -50,7 +51,7 @@ class CommandsMixin:
     _registry: SessionRegistry
     _rate_limiter: RateLimiter
     _setup_messages: dict[int, _SetupMessages]
-    _last_end_message_ids: dict[int, int]
+    _channel_cleanup: dict[int, _ChannelCleanup]
 
     if TYPE_CHECKING:
         # Provided by LifecycleMixin — declared here, type-checking only,
@@ -174,23 +175,47 @@ class CommandsMixin:
             facilitator_id=str(interaction.user.id),
         )
 
-        # Delete the previous session's "Time's up" message in this channel,
+        # Clean up the previous session's leftover messages in this channel,
         # if any — this also covers a future "Go again" button reusing this
-        # same start path. Best-effort: failures are logged, never fatal.
-        previous_end_message_id = self._last_end_message_ids.pop(
-            interaction.channel.id, None
-        )
-        if previous_end_message_id is not None:
-            try:
-                await interaction.channel.get_partial_message(
-                    previous_end_message_id
-                ).delete()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                logger.warning(
-                    "Failed to delete previous Time's up message %s in channel %s",
-                    previous_end_message_id,
-                    interaction.channel.id,
-                )
+        # same start path. Each step is independent and best-effort: a
+        # failure is logged and does not block the others or the new session.
+        previous_cleanup = self._channel_cleanup.pop(interaction.channel.id, None)
+        if previous_cleanup is not None:
+            if previous_cleanup.times_up_id is not None:
+                try:
+                    await interaction.channel.get_partial_message(
+                        previous_cleanup.times_up_id
+                    ).delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logger.warning(
+                        "Failed to delete previous Time's up message %s in channel %s",
+                        previous_cleanup.times_up_id,
+                        interaction.channel.id,
+                    )
+            if previous_cleanup.why_id is not None:
+                try:
+                    await interaction.channel.get_partial_message(
+                        previous_cleanup.why_id
+                    ).delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logger.warning(
+                        "Failed to delete previous follow-up why message %s"
+                        " in channel %s",
+                        previous_cleanup.why_id,
+                        interaction.channel.id,
+                    )
+            if previous_cleanup.reflect_id is not None:
+                try:
+                    await interaction.channel.get_partial_message(
+                        previous_cleanup.reflect_id
+                    ).edit(embed=None)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logger.warning(
+                        "Failed to strip embed from previous Reflect message %s"
+                        " in channel %s",
+                        previous_cleanup.reflect_id,
+                        interaction.channel.id,
+                    )
 
         # Build the welcome embed.
         embed = _build_welcome_embed()

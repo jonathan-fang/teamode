@@ -30,6 +30,7 @@ from app.discord_bot.views import (
     COLORS,
     _build_timer_view,
     _build_welcome_embed,
+    _ChannelCleanup,
     _EditState,
     _SetupMessages,
 )
@@ -56,7 +57,7 @@ class LifecycleMixin:
     _edit_states: dict[int, _EditState]
     _pending_expiry_tasks: dict[int, asyncio.Task[None]]
     _setup_messages: dict[int, _SetupMessages]
-    _last_end_message_ids: dict[int, int]
+    _channel_cleanup: dict[int, _ChannelCleanup]
 
     # ------------------------------------------------------------------
     # Centralized terminal-state cleanup
@@ -242,7 +243,8 @@ class LifecycleMixin:
         # in-memory only, lost on restart, which is accepted).
         channel_id = getattr(channel, "id", None)
         if channel_id is not None:
-            self._last_end_message_ids[channel_id] = end_message.id
+            cleanup = self._channel_cleanup.setdefault(channel_id, _ChannelCleanup())
+            cleanup.times_up_id = end_message.id
 
         # Step c: Reverie playback + disconnect.
         playback_ok = await voice.play_reverie_then_disconnect(voice_client)
@@ -264,8 +266,12 @@ class LifecycleMixin:
         await reflect_msg.add_reaction("✅")
         await reflect_msg.add_reaction("⛔")
 
-        # Step f: Store the Reflect message id for the reaction listener.
+        # Step f: Store the Reflect message id for the reaction listener, and
+        # for the next session's cleanup (its embed is stripped then).
         self._reflect_message_ids[session_id] = reflect_msg.id
+        if channel_id is not None:
+            cleanup = self._channel_cleanup.setdefault(channel_id, _ChannelCleanup())
+            cleanup.reflect_id = reflect_msg.id
 
         # Step g: 3-minute watchdog.
         async def _watchdog() -> None:
@@ -359,9 +365,15 @@ class LifecycleMixin:
             await self._on_session_terminal(session_id)
             channel = self.client.get_channel(int(session.text_channel_id))
             if isinstance(channel, discord.abc.Messageable):
-                await channel.send(
+                why_message = await channel.send(
                     FOLLOWUP_WHY_PROMPT.format(facilitator_id=session.facilitator_id)
                 )
+                text_channel_id = getattr(channel, "id", None)
+                if text_channel_id is not None:
+                    cleanup = self._channel_cleanup.setdefault(
+                        text_channel_id, _ChannelCleanup()
+                    )
+                    cleanup.why_id = why_message.id
             elif channel is not None:
                 logger.warning(
                     "Channel %s for session %s is not sendable —"

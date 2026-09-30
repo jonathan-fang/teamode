@@ -27,7 +27,12 @@ import pytest
 
 from app.db import init_db
 from app.discord_bot import TeaModeBot
-from app.discord_bot.views import IntentionModal, _EditState, _SetupMessages
+from app.discord_bot.views import (
+    IntentionModal,
+    _ChannelCleanup,
+    _EditState,
+    _SetupMessages,
+)
 from app.session import SessionRegistry, SessionState
 
 # ---------------------------------------------------------------------------
@@ -234,6 +239,7 @@ async def test_voice_connect_failure_deletes_setup_messages(
     _install_fake_client(bot, fake_channel)
 
     fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_voice_channel.get_partial_message = MagicMock(return_value=AsyncMock())
     modal = IntentionModal(bot=bot, session_id=sid, voice_channel=fake_voice_channel)
     text_input = modal.intention_field.component
     assert isinstance(text_input, discord.ui.TextInput)
@@ -345,14 +351,124 @@ async def test_previous_times_up_deleted_on_next_session_start(
     inter.channel = fake_channel
     inter.channel.id = 333
 
-    bot._last_end_message_ids[333] = 5555
+    bot._channel_cleanup[333] = _ChannelCleanup(times_up_id=5555)
 
     with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot._handle_teamode(inter)
 
     fake_channel.get_partial_message.assert_any_call(5555)
     fake_partial.delete.assert_awaited_once()
-    assert 333 not in bot._last_end_message_ids
+    assert 333 not in bot._channel_cleanup
+
+
+@pytest.mark.asyncio
+async def test_previous_why_and_reflect_cleaned_up_on_next_session_start(
+    bot: TeaModeBot,
+) -> None:
+    """At the next session start: the previous ⛔ line is deleted and the
+    previous Reflect message is edited with its embed removed (content
+    untouched)."""
+    fake_partials: dict[int, AsyncMock] = {}
+
+    def _get_partial(message_id: int) -> AsyncMock:
+        return fake_partials.setdefault(message_id, AsyncMock())
+
+    fake_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_channel.get_partial_message = MagicMock(side_effect=_get_partial)
+
+    inter = _make_voice_interaction(channel_id=333)
+    inter.channel = fake_channel
+    inter.channel.id = 333
+
+    bot._channel_cleanup[333] = _ChannelCleanup(
+        times_up_id=5555, reflect_id=6666, why_id=7777
+    )
+
+    with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
+        await bot._handle_teamode(inter)
+
+    fake_partials[5555].delete.assert_awaited_once()
+    fake_partials[7777].delete.assert_awaited_once()
+    fake_partials[6666].edit.assert_awaited_once_with(embed=None)
+    assert 333 not in bot._channel_cleanup
+
+
+@pytest.mark.asyncio
+async def test_no_why_line_only_times_up_and_reflect_handled(
+    bot: TeaModeBot,
+) -> None:
+    """When the facilitator answered ✅ (no ⛔ line recorded), only Time's up
+    and Reflect are handled at the next session start."""
+    fake_partials: dict[int, AsyncMock] = {}
+
+    def _get_partial(message_id: int) -> AsyncMock:
+        return fake_partials.setdefault(message_id, AsyncMock())
+
+    fake_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_channel.get_partial_message = MagicMock(side_effect=_get_partial)
+
+    inter = _make_voice_interaction(channel_id=333)
+    inter.channel = fake_channel
+    inter.channel.id = 333
+
+    bot._channel_cleanup[333] = _ChannelCleanup(times_up_id=5555, reflect_id=6666)
+
+    with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
+        await bot._handle_teamode(inter)
+
+    fake_partials[5555].delete.assert_awaited_once()
+    fake_partials[6666].edit.assert_awaited_once_with(embed=None)
+    assert 7777 not in fake_partials
+    assert 333 not in bot._channel_cleanup
+
+
+@pytest.mark.asyncio
+async def test_channel_cleanup_failures_logged_as_warning_and_flow_continues(
+    bot: TeaModeBot,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Each cleanup step is independent: a failure on one (Time's up delete,
+    ⛔ delete, or Reflect embed-strip) is logged at WARNING and does not
+    block the others or the new session from starting."""
+    fake_times_up = AsyncMock()
+    fake_times_up.delete = AsyncMock(side_effect=discord.NotFound(MagicMock(), "gone"))
+    fake_why = AsyncMock()
+    fake_why.delete = AsyncMock(side_effect=discord.NotFound(MagicMock(), "gone"))
+    fake_reflect = AsyncMock()
+    fake_reflect.edit = AsyncMock(side_effect=discord.NotFound(MagicMock(), "gone"))
+
+    partials = {5555: fake_times_up, 6666: fake_reflect, 7777: fake_why}
+    fake_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_channel.get_partial_message = MagicMock(side_effect=lambda mid: partials[mid])
+
+    inter = _make_voice_interaction(channel_id=333)
+    inter.channel = fake_channel
+    inter.channel.id = 333
+
+    bot._channel_cleanup[333] = _ChannelCleanup(
+        times_up_id=5555, reflect_id=6666, why_id=7777
+    )
+
+    with (
+        patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()),
+        caplog.at_level(logging.WARNING, logger="app.discord_bot.commands"),
+    ):
+        await bot._handle_teamode(inter)
+
+    assert any(
+        "Failed to delete previous Time's up message" in r.message
+        for r in caplog.records
+    )
+    assert any(
+        "Failed to delete previous follow-up why message" in r.message
+        for r in caplog.records
+    )
+    assert any(
+        "Failed to strip embed from previous Reflect message" in r.message
+        for r in caplog.records
+    )
+    # The new session still started (cleanup entry cleared regardless).
+    assert 333 not in bot._channel_cleanup
 
 
 # ---------------------------------------------------------------------------
