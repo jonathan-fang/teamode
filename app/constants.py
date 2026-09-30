@@ -156,13 +156,9 @@ SOLO_GRACE_ENDED = "Session ended — facilitator did not return."
 # New copy — voice channel status (used later)
 # ---------------------------------------------------------------------------
 
-VOICE_STATUS_STARTING = "🍵 Starting TeaMode"
 VOICE_STATUS_TIMER = "⏳ to {hhmm}"
 VOICE_STATUS_FINISHED = "✨ Finished TeaMode at {hhmm}"
 VOICE_STATUS_CANCELLED = "🍵 Cancelled"
-VOICE_STATUS_EXPIRED = "🍵 Expired"
-VOICE_STATUS_CRASHED = "🍵 Crashed"
-VOICE_STATUS_BREAK = "⏸️ Break until {hhmm}"
 
 # ---------------------------------------------------------------------------
 # New copy — timer embed (used later)
