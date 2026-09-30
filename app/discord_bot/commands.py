@@ -52,11 +52,19 @@ class CommandsMixin:
     _rate_limiter: RateLimiter
     _setup_messages: dict[int, _SetupMessages]
     _channel_cleanup: dict[int, _ChannelCleanup]
+    # Per-session record of whether it was started via Go again — see
+    # BreakMixin's module docstring.
+    _chained_via_go_again: dict[int, bool]
 
     if TYPE_CHECKING:
         # Provided by LifecycleMixin — declared here, type-checking only,
         # so pyright can check this mixin's own methods in isolation.
         def _arm_pending_expiry(self, session_id: int) -> None: ...
+
+        # Provided by BreakMixin — same reasoning.
+        async def _clear_chain_state(self, channel_id: int) -> None: ...
+        async def _cancel_break(self, channel_id: int) -> None: ...
+        def _reset_streak(self, channel_id: int) -> None: ...
 
     def _register_command(self) -> None:
         """Register /teamode and /handoff on the global command tree.
@@ -86,12 +94,18 @@ class CommandsMixin:
         """The /teamode slash command — delegates to the shared session start."""
         await self._start_session(interaction)
 
-    async def _start_session(self, interaction: discord.Interaction) -> None:
+    async def _start_session(
+        self, interaction: discord.Interaction, *, via_go_again: bool = False
+    ) -> None:
         """Cumulative invocation guard → rate limit → create session → post welcome.
 
-        Shared by the /teamode slash command and (in a later Task) a
-        "Go again" button — accepts any ``discord.Interaction`` and whoever
-        triggers it becomes facilitator.
+        Shared by the /teamode slash command and the "Go again" button —
+        accepts any ``discord.Interaction`` and whoever triggers it becomes
+        facilitator. *via_go_again* is ``True`` only for the Go again path
+        (see ``BreakMixin._handle_go_again``); it is recorded against the
+        new session for the streak logic in
+        ``BreakMixin._post_chain_prompt``, and a plain ``/teamode`` start
+        (``via_go_again=False``) always resets the channel's streak.
         """
 
         # Guard 1 — must be invoked from a voice channel's text chat.
@@ -175,6 +189,13 @@ class CommandsMixin:
             facilitator_id=str(interaction.user.id),
         )
 
+        # Record whether this session was chained via Go again, for the
+        # streak logic in BreakMixin._post_chain_prompt. A plain /teamode
+        # start always restarts the channel's streak from scratch.
+        self._chained_via_go_again[session.session_id] = via_go_again
+        if not via_go_again:
+            self._reset_streak(interaction.channel.id)
+
         # Clean up the previous session's leftover messages in this channel,
         # if any — this also covers a future "Go again" button reusing this
         # same start path. Each step is independent and best-effort: a
@@ -216,6 +237,13 @@ class CommandsMixin:
                         previous_cleanup.reflect_id,
                         interaction.channel.id,
                     )
+
+        # Clear any standing chain prompt (Go again / break offer) and
+        # cancel any in-progress break in this channel — a new session
+        # (this one) supersedes both. This also covers a "Go again" click,
+        # which reaches here via the same start path.
+        await self._clear_chain_state(interaction.channel.id)
+        await self._cancel_break(interaction.channel.id)
 
         # Build the welcome embed.
         embed = _build_welcome_embed()

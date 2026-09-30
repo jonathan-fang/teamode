@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 
 from app.config import TEAMODE_DEV_GUILD_IDS, TEAMODE_TIMEZONE
+from app.discord_bot.breaks import BreakMixin, _BreakState, _ChainState
 from app.discord_bot.commands import CommandsMixin
 from app.discord_bot.lifecycle import LifecycleMixin
 from app.discord_bot.timer import TimerMixin
@@ -25,7 +26,7 @@ from app.session import SessionRegistry
 logger = logging.getLogger(__name__)
 
 
-class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin):
+class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin, BreakMixin):
     """Owns the Discord client, command tree, DB connection, and session registry.
 
     Dependencies (conn and registry) are injected by the entry point so that
@@ -85,6 +86,32 @@ class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin):
         # In-memory only — lost on restart (accepted). Cleaned up when the
         # next session starts in that channel.
         self._channel_cleanup: dict[int, _ChannelCleanup] = {}
+
+        # The standing "Go again / break offer" chaining prompt per text
+        # channel — posted after a facilitator ✅/⛔, and again (Go-again
+        # only) after a break ends. In-memory only — lost on restart.
+        # Cleared when a break starts or a new session starts in the
+        # channel (see BreakMixin._clear_chain_state).
+        self._chain_states: dict[int, _ChainState] = {}
+
+        # The in-progress break (five- or ten-minute) per text channel, if
+        # any. In-memory only — lost on restart. Cancelled when a new
+        # session starts in the channel (see BreakMixin._cancel_break).
+        self._break_states: dict[int, _BreakState] = {}
+
+        # Per-channel streak of chained, qualifying session durations (each
+        # >= LONG_BREAK_MIN_SESSION_MINUTES, ending in a facilitator ✅/⛔,
+        # and — after the first — started via Go again). In-memory only —
+        # reset whenever a break starts, a session starts via /teamode, a
+        # session is too short, a follow-up times out, or a session is
+        # cancelled (see BreakMixin._reset_streak and its callers).
+        self._streaks: dict[int, list[int]] = {}
+
+        # Whether each session was started via Go again (True) or
+        # /teamode (False) — recorded at session creation, read once (and
+        # popped) by BreakMixin._post_chain_prompt via _pop_chained_flag to
+        # decide whether to extend or restart the channel's streak.
+        self._chained_via_go_again: dict[int, bool] = {}
 
         intents = discord.Intents.default()
         intents.guilds = True
@@ -173,6 +200,10 @@ class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin):
 
         if purpose == "timer":
             await self._handle_timer_pick(interaction, session_id, parts)
+        elif purpose == "again":
+            await self._handle_go_again(interaction, session_id, parts)
+        elif purpose == "break":
+            await self._handle_break(interaction, session_id, parts)
 
     def run(self, token: str) -> None:
         """Start the Discord event loop."""

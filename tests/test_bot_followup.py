@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from app.constants import END_EMBED_BODY, END_EMBED_TITLE
+from app.constants import CHAIN_PROMPT, END_EMBED_BODY, END_EMBED_TITLE
 from app.discord_bot import TeaModeBot
 from app.discord_bot.views import COLORS
 from app.db import init_db
@@ -416,11 +416,13 @@ async def test_facilitator_no_entry_marks_completed_0_and_posts_why(
     watchdog.cancel.assert_called_once()
     assert sid not in bot._reflect_message_ids
 
-    # "Why" prompt was sent.
-    fake_channel.send.assert_awaited_once()
-    why_text: str = fake_channel.send.call_args.args[0]
+    # "Why" prompt sent first, chain prompt (Go again / break) sent after it.
+    assert fake_channel.send.await_count == 2
+    why_text: str = fake_channel.send.call_args_list[0].args[0]
     assert "<@111>" in why_text
     assert "share what got in the way" in why_text
+    chain_text: str = fake_channel.send.call_args_list[1].args[0]
+    assert chain_text == CHAIN_PROMPT
 
 
 # ---------------------------------------------------------------------------
