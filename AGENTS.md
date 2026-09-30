@@ -224,10 +224,30 @@ APM_RULES {
   - any Discord-facing string that is not already defined in
     `app/constants.py` or given in the Task Prompt,
   - any decision the Task Prompt marks as the User's.
-- Obtain explicit User approval before creating any commit, merge, tag
-  or push — present the message and changed files, then wait.
+- Workers commit freely on their assigned feature branch (local and
+  reversible). The Manager obtains explicit User approval before each
+  merge into `main` — presenting the commits and changed files, then
+  waiting. Tags and pushes always need explicit User approval.
 - Outside APM Task execution (ad-hoc chats), § Approval Gates above
   applies unchanged.
+
+## Version Control
+
+- Base branch: `main`. One `type/short-description` feature branch per
+  dispatch unit (e.g. `refactor/discord-bot-package`); the Manager
+  creates branches and merges with `--no-ff`, then deletes the branch.
+  Nothing is pushed to `origin`.
+- Commits: Conventional Commits `type(scope): description` (types
+  feat, fix, refactor, docs, test, chore, style, perf), 50/72 rule
+  (subject ≤ 50 chars, imperative, no period; body wrapped at 72).
+  One logical change per commit; commit at intermediate points on
+  large work.
+- Stage files explicitly by path (`git add <path>`); never
+  `git add -A` / `git add .` — the working tree may hold uncommitted
+  `.apm/`, `AGENTS.md` or User edits that are not yours to commit.
+- `.apm/` and `.claude/` are tracked per convention; the Manager
+  commits APM artifacts, Workers do not stage them (Task Logs are
+  written to disk only).
 
 ## Validation Protocol
 
