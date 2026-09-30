@@ -19,24 +19,28 @@ from __future__ import annotations
 # Tunables
 # ---------------------------------------------------------------------------
 
-DURATIONS_MINUTES: tuple[int, ...] = (5, 10, 25, 50)  # only allows int
+DURATIONS_MINUTES: tuple[int, ...] = (5, 10, 25, 50)  # 2 only allows int # smoke
 
 RATE_LIMIT_WINDOW_SECONDS = 300
 RATE_LIMIT_ALLOWANCE = 3
 GUILD_DAILY_CAP = 50
-WRAP_UP_MINUTES = 3  # 3
-NUDGE_MIN_DURATION_MINUTES = 10  # 10
-PENDING_TIMEOUT_SECONDS = 600  # 600
-BREAK_MINUTES = 5
-LONG_BREAK_MINUTES = 10
-LONG_BREAK_MIN_SESSION_MINUTES = 25  # sessions this long count toward the streak
+WRAP_UP_MINUTES = 3  # 3 # smoke
+NUDGE_MIN_DURATION_MINUTES = 10  # 10 # smoke
+PENDING_TIMEOUT_SECONDS = 600  # 600 # smoke
+BREAK_MINUTES = 5  # 5 # smoke
+LONG_BREAK_MINUTES = 10  # 10 # smoke
+LONG_BREAK_MIN_SESSION_MINUTES = (
+    25  # 25 sessions this long count toward the streak # smoke
+)
 LONG_BREAK_STREAK = 2  # chained qualifying sessions before the long break
-GO_AGAIN_TIMEOUT_SECONDS = 180
-CLEAR_SCAN_LIMIT = 200
-CLEAR_DELETE_INTERVAL_SECONDS = 1.0  # pause between deletes (~5 per 5 s per channel)
+GO_AGAIN_TIMEOUT_SECONDS = 180  # 180 # smoke
+CLEAR_SCAN_LIMIT = 800  # 800
+CLEAR_DELETE_INTERVAL_SECONDS = (
+    1.0  # pause between deletes (~5 per 5 s per channel) 1.0 is perfect
+)
 
 FOLLOWUP_TIMEOUT_SECONDS = 180  # moved from app/discord_bot/lifecycle.py
-SOLO_GRACE_SECONDS = 300  # 300 moved from app/discord_bot/lifecycle.py
+SOLO_GRACE_SECONDS = 300  # 300 moved from app/discord_bot/lifecycle.py # smoke
 EDIT_INTERVAL_SECONDS = 10  # moved from app/discord_bot/timer.py
 BACKOFF_FLOOR_DEFAULT = 10.0  # moved from app/discord_bot/views.py
 BACKOFF_FLOOR_CAP = 60.0  # moved from app/discord_bot/timer.py

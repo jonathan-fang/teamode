@@ -27,7 +27,7 @@ Package refactor, reliability hardening, and the features that were
   completion rate), plus a personal day streak.
 - **`/teamode-clear`** (requires the invoking member's Manage
   Messages) — deletes Ocha's own past TeaMode clutter from the last
-  200 messages, paced to stay under Discord's per-channel delete rate
+  800 messages, paced to stay under Discord's per-channel delete rate
   limit. Keeps live timers, handoff notices, and anything belonging to
   a live session, chain prompt, or break.
 - **Voice channel status**, shown only while Ocha is connected: timer

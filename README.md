@@ -80,7 +80,7 @@ and what you set out to do, or check `/teamode-stats`.
   server's, over the last 7 days / 30 days / all time, plus your
   personal daily streak.
 - **`/teamode-clear`** (requires Manage Messages) — deletes Ocha's own
-  past TeaMode clutter from the last 200 messages in the channel,
+  past TeaMode clutter from the last 800 messages in the channel,
   paced to stay under Discord's rate limits. Keeps timers, handoff
   notices, and anything belonging to a live session, chain prompt, or
   break.

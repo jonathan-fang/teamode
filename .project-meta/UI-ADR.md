@@ -232,7 +232,7 @@ personal streak (consecutive local days with a qualifying session) is
 - `CLEAR_NO_PERMISSION`: `You need the Manage Messages permission to
   run /teamode-clear.` — ephemeral refusal when the invoking member
   lacks Manage Messages (the bot itself does not need it).
-- Scans the last `CLEAR_SCAN_LIMIT` (200) messages, deletes one at a
+- Scans the last `CLEAR_SCAN_LIMIT` (800) messages, deletes one at a
   time paced by `CLEAR_DELETE_INTERVAL_SECONDS` (1.0s). Keeps live
   timers, handoff notices, and anything belonging to a live session,
   chain prompt, or break.
