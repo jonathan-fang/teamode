@@ -509,3 +509,26 @@ async def test_long_intention_truncated_in_field(
     field_values = {f.name: f.value for f in embed.fields}
     assert len(field_values["Intention"]) <= 1024
     assert field_values["Intention"].endswith("…")
+
+
+def test_started_at_field_shows_start_to_end_range() -> None:
+    """The Started at field shows the local start and end time as a range."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    from app.discord_bot.views import _build_timer_message
+
+    with patch(
+        "app.discord_bot.views.TEAMODE_TIMEZONE", ZoneInfo("America/Los_Angeles")
+    ):
+        _content, embed = _build_timer_message(
+            intention="x",
+            duration_minutes=25,
+            facilitator_id="111",
+            started_at=datetime(2026, 1, 15, 23, 50, tzinfo=timezone.utc),
+            seconds_remaining=1500,
+            mention_line="",
+        )
+
+    field_values = {f.name: f.value for f in embed.fields}
+    assert field_values["Started at"] == "15:50 to 16:15"

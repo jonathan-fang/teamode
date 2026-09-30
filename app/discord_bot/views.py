@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Protocol
 
 import discord
@@ -38,6 +38,7 @@ from app.constants import (
     TIMER_FIELD_STARTED_AT,
     TIMER_FIELD_VALUE_MAX_LENGTH,
     TIMER_REMAINING,
+    TIMER_TIME_RANGE,
     WELCOME_EMBED_DESCRIPTION,
     WELCOME_EMBED_TITLE,
 )
@@ -124,7 +125,12 @@ def _build_timer_message(
     )
     embed.add_field(
         name=TIMER_FIELD_STARTED_AT,
-        value=timer_format.format_hhmm(started_at, TEAMODE_TIMEZONE),
+        value=TIMER_TIME_RANGE.format(
+            start=timer_format.format_hhmm(started_at, TEAMODE_TIMEZONE),
+            end=timer_format.format_hhmm(
+                started_at + timedelta(minutes=duration_minutes), TEAMODE_TIMEZONE
+            ),
+        ),
         inline=False,
     )
 
