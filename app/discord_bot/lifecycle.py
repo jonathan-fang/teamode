@@ -71,9 +71,10 @@ class LifecycleMixin:
         messages.
 
         Called at every terminal transition. ``delete_setup_messages=True``
-        (the default) deletes the welcome and Set-Intention messages via
-        the channel — used by every terminal path except pending expiry,
-        which edits the welcome message in place instead and passes
+        (the default) deletes the welcome, Set-Intention, and (if it
+        fired) wrap-up nudge messages via the channel — used by every
+        terminal path except pending expiry, which edits the welcome
+        message in place instead and passes
         ``delete_setup_messages=False``. Idempotent: each pop is a no-op
         when the key is already gone, so callers that already did some of
         this cleanup themselves are safe to call it again.
@@ -108,7 +109,11 @@ class LifecycleMixin:
             )
             return
 
-        for message_id in (setup.welcome_message_id, setup.intention_message_id):
+        for message_id in (
+            setup.welcome_message_id,
+            setup.intention_message_id,
+            setup.nudge_message_id,
+        ):
             if message_id is None:
                 continue
             try:

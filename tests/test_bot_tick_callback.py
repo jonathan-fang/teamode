@@ -9,7 +9,7 @@ Covers:
 from __future__ import annotations
 
 import sqlite3
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
@@ -18,12 +18,13 @@ from app.constants import (
     BACKOFF_FLOOR_CAP,
     BACKOFF_FLOOR_DEFAULT,
     MSG_WRAP_UP_NUDGE,
+    MSG_WRAP_UP_NUDGE_ONE,
     PHASE_DEEP_FOCUS,
     TIMER_CONTENT,
     WRAP_UP_MINUTES,
 )
 from app.discord_bot import TeaModeBot
-from app.discord_bot.views import COLORS, _EditState
+from app.discord_bot.views import COLORS, _EditState, _SetupMessages
 from app.db import init_db
 from app.session import SessionRegistry
 
@@ -277,6 +278,174 @@ async def test_nudge_never_fires_for_short_session(
         await bot._on_countdown_tick(session_id, seconds_remaining=seconds_remaining)
 
     fake_channel.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_nudge_uses_singular_copy_when_wrap_up_minutes_is_one(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """With WRAP_UP_MINUTES patched to 1, the nudge text is the singular
+    copy, not the plural template formatted with 1."""
+    session_id, fake_msg = _seed_active_session(registry, bot)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_msg.channel = fake_channel
+
+    with (
+        patch("app.discord_bot.timer.WRAP_UP_MINUTES", 1),
+        patch("app.timer_format.WRAP_UP_MINUTES", 1),
+    ):
+        await bot._on_countdown_tick(session_id, seconds_remaining=60)
+
+    fake_channel.send.assert_awaited_once_with(MSG_WRAP_UP_NUDGE_ONE)
+
+
+@pytest.mark.asyncio
+async def test_nudge_uses_plural_copy_at_default_wrap_up_minutes(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """At the default WRAP_UP_MINUTES (3, i.e. >= 2), the nudge text is the
+    plural template."""
+    session_id, fake_msg = _seed_active_session(registry, bot)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_msg.channel = fake_channel
+    trigger = WRAP_UP_MINUTES * 60
+
+    await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
+
+    fake_channel.send.assert_awaited_once_with(
+        MSG_WRAP_UP_NUDGE.format(minutes=WRAP_UP_MINUTES)
+    )
+
+
+@pytest.mark.asyncio
+async def test_nudge_plays_wind_chime_on_voice_client(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """At the nudge tick, the wind chime plays exactly once on the
+    session's voice client, and the client is never disconnected."""
+    session_id, fake_msg = _seed_active_session(registry, bot)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_msg.channel = fake_channel
+
+    fake_voice_client = MagicMock(spec=discord.VoiceClient)
+    fake_voice_client.is_connected.return_value = True
+    fake_voice_client.is_playing.return_value = False
+    bot._voice_clients[session_id] = fake_voice_client
+
+    trigger = WRAP_UP_MINUTES * 60
+    with patch("app.discord_bot.timer.voice.discord.FFmpegPCMAudio"):
+        await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
+
+    fake_voice_client.play.assert_called_once()
+    fake_voice_client.disconnect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_chime_on_tick_without_nudge(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """A tick that isn't the nudge trigger never touches the voice client."""
+    session_id, fake_msg = _seed_active_session(registry, bot)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_msg.channel = fake_channel
+
+    fake_voice_client = MagicMock(spec=discord.VoiceClient)
+    bot._voice_clients[session_id] = fake_voice_client
+
+    await bot._on_countdown_tick(session_id, seconds_remaining=1200)
+
+    fake_voice_client.play.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_chime_for_session_below_nudge_min_duration(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """A short session (below NUDGE_MIN_DURATION_MINUTES) never nudges and
+    never touches the voice client, even at what would be the trigger
+    second for a longer session."""
+    session = registry.create_pending_session(
+        guild_id="100",
+        text_channel_id="200",
+        voice_channel_id="300",
+        facilitator_id="111",
+    )
+    session_id = session.session_id
+    registry.set_duration(session_id=session_id, duration_minutes=5)
+    registry.set_intention(session_id=session_id, intention="x")
+    registry.mark_active(session_id=session_id)
+
+    fake_msg = AsyncMock(spec=discord.Message)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_msg.channel = fake_channel
+    bot._edit_states[session_id] = _EditState(message=fake_msg)
+
+    fake_voice_client = MagicMock(spec=discord.VoiceClient)
+    bot._voice_clients[session_id] = fake_voice_client
+
+    trigger = WRAP_UP_MINUTES * 60
+    await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
+
+    fake_voice_client.play.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_nudge_chime_failure_does_not_raise_and_session_continues(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """A not-connected voice client at nudge time logs a WARNING and does
+    not raise; the session (and the nudge message) proceeds normally."""
+    session_id, fake_msg = _seed_active_session(registry, bot)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_msg.channel = fake_channel
+
+    fake_voice_client = MagicMock(spec=discord.VoiceClient)
+    fake_voice_client.is_connected.return_value = False
+    bot._voice_clients[session_id] = fake_voice_client
+
+    trigger = WRAP_UP_MINUTES * 60
+    await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
+
+    fake_voice_client.play.assert_not_called()
+    fake_channel.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_nudge_still_posted_when_voice_client_missing(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """No voice client stashed for the session (e.g. cleaned up already) —
+    the nudge message still posts; only the chime is skipped."""
+    session_id, fake_msg = _seed_active_session(registry, bot)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_msg.channel = fake_channel
+
+    trigger = WRAP_UP_MINUTES * 60
+    await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
+
+    fake_channel.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_nudge_message_id_stored_on_setup_messages(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """The nudge message's id is stashed on the session's _SetupMessages so
+    terminal cleanup can delete it."""
+    session_id, fake_msg = _seed_active_session(registry, bot)
+    fake_channel = AsyncMock(spec=discord.TextChannel)
+    fake_nudge_msg = AsyncMock(spec=discord.Message)
+    fake_nudge_msg.id = 9999
+    fake_channel.send = AsyncMock(return_value=fake_nudge_msg)
+    fake_msg.channel = fake_channel
+    bot._setup_messages[session_id] = _SetupMessages(
+        channel_id=333, welcome_message_id=100, intention_message_id=200
+    )
+
+    trigger = WRAP_UP_MINUTES * 60
+    await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
+
+    assert bot._setup_messages[session_id].nudge_message_id == 9999
 
 
 @pytest.mark.asyncio

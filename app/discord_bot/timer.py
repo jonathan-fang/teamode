@@ -6,15 +6,14 @@ import logging
 
 import discord
 
-from app import timer_format
+from app import timer_format, voice
 from app.constants import (
     BACKOFF_FLOOR_CAP,
     BACKOFF_FLOOR_DEFAULT,
     EDIT_INTERVAL_SECONDS,
-    MSG_WRAP_UP_NUDGE,
     WRAP_UP_MINUTES,
 )
-from app.discord_bot.views import _build_timer_message, _EditState
+from app.discord_bot.views import _build_timer_message, _EditState, _SetupMessages
 from app.session import SessionRegistry, SessionState
 
 logger = logging.getLogger(__name__)
@@ -27,6 +26,8 @@ class TimerMixin:
     # can type-check the mixin's own methods in isolation.
     _edit_states: dict[int, _EditState]
     _registry: SessionRegistry
+    _setup_messages: dict[int, _SetupMessages]
+    _voice_clients: dict[int, discord.VoiceClient]
 
     async def _on_countdown_tick(self, session_id: int, seconds_remaining: int) -> None:
         """Tick callback injected into ``run_countdown``.
@@ -68,13 +69,28 @@ class TimerMixin:
                 channel = getattr(edit_state.message, "channel", None)
                 if channel is not None:
                     try:
-                        await channel.send(
-                            MSG_WRAP_UP_NUDGE.format(minutes=WRAP_UP_MINUTES)
+                        nudge_message = await channel.send(
+                            timer_format.format_wrap_up_nudge(WRAP_UP_MINUTES)
                         )
                     except discord.HTTPException:
                         logger.warning(
                             "Failed to send wrap-up nudge for session %s", session_id
                         )
+                    else:
+                        setup = self._setup_messages.get(session_id)
+                        if setup is not None:
+                            setup.nudge_message_id = nudge_message.id
+
+                # The chime fires only when the nudge fires (above), whether
+                # or not the nudge message send itself succeeded.
+                voice_client = self._voice_clients.get(session_id)
+                if voice_client is None:
+                    logger.warning(
+                        "No voice client for session %s — skipping wind chime",
+                        session_id,
+                    )
+                else:
+                    voice.play_wind_chime(voice_client)
 
         # Only edit on 10-second boundaries and at zero.
         if seconds_remaining % EDIT_INTERVAL_SECONDS != 0 and seconds_remaining != 0:
