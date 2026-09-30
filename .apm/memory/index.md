@@ -17,6 +17,11 @@ title: TeaMode v26Q3.0.0.0
 - Key runtime helpers after Stage 2: `CommandsMixin._start_session(interaction)` (shared start: guards → rate limit → create session → previous-session cleanup → welcome); `spawn_logged(coro, name)` in `app/discord_bot/tasks.py` for every background task; async `LifecycleMixin._on_session_terminal(session_id, *, delete_setup_messages=True)` as the single terminal hook (extend it for voice status); `_SetupMessages` per session; `_ChannelCleanup` per text channel (Time's up, Reflect, ⛔ line); `_build_active_timer_content(...)` single timer-content builder; `_build_timer_view(session_id, *, disabled=False)`.
 - Session flow as shipped: duration buttons stay enabled while pending (re-pick allowed, latest wins); intention submit disables them and cancels pending expiry; modal double-submit refused with `MSG_SESSION_INACTIVE`. At next session start: previous Time's up and ⛔ line deleted, previous Reflect embed stripped (content kept). `/teamode-clear` must classify Reflect with or without embed.
 - Planning-doc accuracy: Manager-authored prompt details can contradict the Spec (pending-expiry cancel point) — cross-check Task Prompt instructions against Spec wording for state-machine behavior before dispatch.
+- The User keeps smoke-test values uncommitted in `app/constants.py` for long stretches and edits copy there directly. Never let Workers stage that file; commit User-requested lines via backup → edit to HEAD + change → commit → restore; stash that one file around branch switches. Tell Workers to run pytest against `git show HEAD:app/constants.py` and restore.
+- Voice channel status is set only while Ocha is connected (Discord needs Manage Channels otherwise; User chose not to grant it): Timer, Finished (`✨ Done at {hhmm}`), solo-grace Cancelled (set before disconnect). No Starting/Expired/Crashed/Break status. Helper: `LifecycleMixin._set_voice_status(channel_or_id, status)`.
+- Timer surface after Stage 3: `_build_timer_message(...)` returns `(content, embed)`; `_EditState.started_at` / `nudge_sent`; fields Intention / Facilitator / Range (`{start} to {end}`); content `⏳ MM:SS remaining`; nudge threshold 10 min with singular/plural copy, wind chime via `voice.play_wind_chime`, nudge ID on `_SetupMessages` deleted at terminal cleanup.
+- Sound credits for README: wind chime by GnoteSoundz (CC0); reverie by Seemant Chandra (Instagram: piyush.x_x) — do not mention or link the source project. Repo is private.
+- Auto-handoff (random among remaining humans) exists from the MVP but is still unverified live; needs a second account.
 
 ## Stage Summaries
 
@@ -40,3 +45,12 @@ Stage 2 grew from four to five Bot Engineer Tasks and landed in two merges. Batc
 - task-02-03.log.md
 - task-02-04.log.md
 - task-02-05.log.md
+
+### Stage 3 - Embed Timer and Voice Channel Status
+
+Stage 3 grew from two to three Bot Engineer Tasks and landed in two merges (`0970a4d` embed timer, `92e8d24` voice status). Task 3.1 added pure `app/timer_format.py` and replaced the plain-text timer with an embed + `⏳` content fallback, Deep focus → Wrap up phase (sage → amber), one-time wrap-up nudge, and a frozen muted-red solo-grace final state (`5fc3279`, `d86fce3`). The Worker committed a mid-task User edit of `NUDGE_MIN_DURATION_MINUTES` (20 → 10), which the User then confirmed. The 3.1 smoke test passed on desktop, mobile and with embeds disabled, and produced Task 3.3 (User decisions): singular/plural nudge copy, a wind chime (`assets/wind-chime.wav`, CC0 by GnoteSoundz) played in voice with the nudge, nudge deletion at terminal cleanup, and `⏳ MM:SS remaining` (`dd0f517`, `ebf82f2`, `18800b5`). The Manager then added the User-specified `Range` field (`HH:MM to HH:MM`, `e06bc57`, `d1d0bb3`) and committed User constant comments. Task 3.2 set statuses at every moment (`e1716a9`, `f712ce1`); the smoke test confirmed Discord refuses out-of-voice status edits without Manage Channels, and the User chose option B — status only while connected — so a follow-up (`f6b1010`) kept Timer, Finished and solo-grace Cancelled (reordered before disconnect), removed Starting/Expired/Crashed plumbing, and dropped Break status from Stage 4. The Manager removed the unused status copy (`ec726a9`) and committed the User's `✨ Done at {hhmm}` wording (`34a6e2c`). Suite at 238 tests. Working pattern established: the User keeps smoke values uncommitted in `app/constants.py`; Manager commits requested lines via backup/edit/restore and stashes around merges. The auto-mode shell classifier had transient outages; file tools and shorter commands worked around them.
+
+**Task Logs:**
+- task-03-01.log.md
+- task-03-02.log.md
+- task-03-03.log.md

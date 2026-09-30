@@ -1,6 +1,6 @@
 ---
 title: TeaMode v26Q3.0.0.0
-modified: Stage 3 wrap-up refinements per User decision after the embed-timer smoke test (nudge threshold 10 min, singular/plural nudge copy, wind-chime audio with the nudge, nudge message deleted at terminal cleanup, content line gains 'remaining'). Modified by the Manager.
+modified: Voice channel status restricted to while-connected (User decision B after the 3.2 smoke test confirmed out-of-voice edits need Manage Channels); Break status dropped; README launcher/secrets docs added. Earlier: Stage 3 wrap-up refinements. Modified by the Manager.
 ---
 
 # APM Spec
@@ -143,7 +143,7 @@ Solo-grace cancellation keeps its existing text (`Session ended — facilitator 
 
 - After the facilitator answers ✅ or ⛔ on Reflect, Ocha posts the chaining prompt with two buttons: Go again and Take a 5-minute break. Not offered after follow-up timeout. Any voice-channel member may click.
 - **Go again** → calls the shared session start (see Session Flow Changes). Counts toward rate limits.
-- **Break** → in-memory only, not a DB row. Posts the break-started message; sets voice status to the break status. `/teamode` (or Go again) in that channel during a break cancels the break and edits the break message to the break-cancelled line. When `BREAK_MINUTES` elapse: bot joins voice, plays reverie, disconnects, posts the break-over message with a Go again button. If nobody clicks within `GO_AGAIN_TIMEOUT_SECONDS`, the button is disabled (no new text).
+- **Break** → in-memory only, not a DB row. Posts the break-started message. (No break voice status — the bot is not connected during a break.) `/teamode` (or Go again) in that channel during a break cancels the break and edits the break message to the break-cancelled line. When `BREAK_MINUTES` elapse: bot joins voice, plays reverie, disconnects, posts the break-over message with a Go again button. If nobody clicks within `GO_AGAIN_TIMEOUT_SECONDS`, the button is disabled (no new text).
 - custom_ids follow the UI-ADR namespace (e.g. `teamode:<session_id>:again`, `teamode:<session_id>:break`).
 - Go again after a break reconnects to voice through the normal flow; voice reconnection is a known fragile area from the MVP.
 
@@ -184,19 +184,17 @@ Requires new read helpers in `app/db.py` (none exist today). Queries run on the 
 
 Set via `VoiceChannel.edit(status=...)` (discord.py routes a status-only edit to `PUT /channels/{id}/voice-status`, `discord/abc.py:568`). Requires the "Set Voice Channel Status" permission; on `Forbidden`/`HTTPException`, log WARNING and continue.
 
-**Unverified permission risk:** Discord may additionally require Manage Channels when the bot is not connected to the voice channel. Most statuses (Starting, Finished, terminal, Break, startup crashed reset) are set while the bot is out of voice; only Timer is set while connected. The first voice-status Discord smoke test must explicitly confirm whether out-of-voice status edits succeed. If they fail with `Forbidden`, the User chooses between granting Manage Channels on the voice channels or restricting status updates to while-connected only.
+**Permission finding (verified in Discord, 3.2 smoke test):** Discord requires Manage Channels in addition to Set Voice Channel Status when the bot is not connected to the voice channel; Starting, Expired and Crashed failed with Forbidden while Timer and Finished succeeded. **User decision (option B): set voice status only while the bot is connected to the voice channel.** No Manage Channels permission is requested.
 
 **Required bot permissions** (for README and invite URL): View Channels, Send Messages, Embed Links, Read Message History, Add Reactions, Connect, Speak, Use Application Commands (labelled "Use Slash Commands" in the Developer Portal), Set Voice Channel Status. Invite integer `281477127425088` (previous `2150714432` + bit 48). OAuth2 scopes `bot` + `applications.commands`. No privileged intents. The bot needs no Manage Messages (it deletes only its own messages); `/teamode-clear` checks the invoker's Manage Messages. Existing servers need the permission added to the bot role (and to per-channel overrides on private voice channels).
 
 | Moment | Status constant |
 |---|---|
-| `/teamode` launched | Starting |
-| Timer running (after modal submit / `mark_active`) | Timer, with end time HH:MM |
-| Session completed (follow-up reached) | Finished, with completion time HH:MM |
-| Cancelled / expired / crashed | Matching terminal status |
-| Break running | Break, with end time HH:MM |
+| Timer running (after modal submit / `mark_active`, bot connected) | Timer, with end time HH:MM |
+| Session reaches follow-up (set after Time's up, before reverie/disconnect) | Finished, with completion time HH:MM |
+| Solo-grace cancel (set before the bot disconnects) | Cancelled |
 
-On startup, after reconciliation marks sessions `crashed`, set the crashed status on those sessions' voice channels (IDs in `voice_channel_id`) once the gateway is ready. Reconcile must return or expose the affected voice channel IDs.
+Not set (bot not connected): `/teamode` launch (Starting), pending expiry (Expired), voice-connect failure, startup crash reconciliation (Crashed), breaks. The status otherwise stays as last set until the next timer starts or Discord clears it.
 
 ## Reliability and Operations
 
@@ -240,7 +238,7 @@ Stored in `app/constants.py` as `TEACUP_BANNER`.
 
 | Document | Changes |
 |---|---|
-| `README.md` | Sound credits section: `assets/wind-chime.wav` — "Wind Chime" by GnoteSoundz, CC0 1.0; `assets/reverie.wav` — by Seemant Chandra (Instagram: piyush.x_x). Do not link or mention the source project. New commands (`/teamode-stats`, `/teamode-clear`), chained sessions/breaks, env vars (`TEAMODE_DEV_GUILD_ID`, `TEAMODE_TIMEZONE`), full permission list and invite integer per Voice Channel Status §"Required bot permissions" (plus Manage Messages note for `/teamode-clear` invokers and how to add Set Voice Channel Status to an existing bot role), ffmpeg install line in Requirements, correct guild-sync behavior (unset `TEAMODE_DEV_GUILD_ID` skips registration), session diagram matching real copy. |
+| `README.md` | Launcher section: link `docs/windows-shortcut.md` and show a `~/.teamode-secrets` sample (`export DISCORD_BOT_TOKEN=...`, `export TEAMODE_DEV_GUILD_ID=111...,222...`, `export TEAMODE_TIMEZONE=America/Los_Angeles`, `chmod 600 ~/.teamode-secrets`), noting `scripts/teamode_launcher.sh` sources it. Voice status note: shown only while Ocha is in voice (Manage Channels not requested). Sound credits section: `assets/wind-chime.wav` — "Wind Chime" by GnoteSoundz, CC0 1.0; `assets/reverie.wav` — by Seemant Chandra (Instagram: piyush.x_x). Do not link or mention the source project. New commands (`/teamode-stats`, `/teamode-clear`), chained sessions/breaks, env vars (`TEAMODE_DEV_GUILD_ID`, `TEAMODE_TIMEZONE`), full permission list and invite integer per Voice Channel Status §"Required bot permissions" (plus Manage Messages note for `/teamode-clear` invokers and how to add Set Voice Channel Status to an existing bot role), ffmpeg install line in Requirements, correct guild-sync behavior (unset `TEAMODE_DEV_GUILD_ID` skips registration), session diagram matching real copy. |
 | `.project-meta/UI-ADR.md` | Canonical copy below; embed timer spec; chaining/break surfaces; supersede "do not preempt" note; resolve "Pending UI decisions"; teacup AI-art exception; note that copy lives in `app/constants.py`. |
 | `docs/sqlite-schema.md` | Correct timestamp format (`+00:00`, not `Z`); document read helpers used by stats. |
 | `.project-meta/conventions.md` | Type-hint rule; `cast`/ignore escape hatch; copy and tunables live in `app/constants.py`; package layout; channel-send rule. |
@@ -258,13 +256,13 @@ All strings below are User-approved and must be used verbatim (placeholders in `
 
 | Key | Text |
 |---|---|
-| `VOICE_STATUS_STARTING` | `🍵 Starting TeaMode` |
+| ~~`VOICE_STATUS_STARTING`~~ | removed — option B (bot not connected at launch) |
 | `VOICE_STATUS_TIMER` | `⏳ to {hhmm}` |
-| `VOICE_STATUS_FINISHED` | `✨ Finished TeaMode at {hhmm}` |
+| `VOICE_STATUS_FINISHED` | `✨ Done at {hhmm}` (User shortened from `✨ Finished TeaMode at {hhmm}`) |
 | `VOICE_STATUS_CANCELLED` | `🍵 Cancelled` |
-| `VOICE_STATUS_EXPIRED` | `🍵 Expired` |
-| `VOICE_STATUS_CRASHED` | `🍵 Crashed` |
-| `VOICE_STATUS_BREAK` | `⏸️ Break until {hhmm}` |
+| ~~`VOICE_STATUS_EXPIRED`~~ | removed — option B |
+| ~~`VOICE_STATUS_CRASHED`~~ | removed — option B |
+| ~~`VOICE_STATUS_BREAK`~~ | removed — option B (bot not connected during a break) |
 
 ### Embed timer
 
