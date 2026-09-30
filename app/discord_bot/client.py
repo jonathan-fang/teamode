@@ -9,11 +9,12 @@ import sqlite3
 import discord
 from discord import app_commands
 
-from app.config import TEAMODE_DEV_GUILD_IDS
+from app.config import TEAMODE_DEV_GUILD_IDS, TEAMODE_TIMEZONE
 from app.discord_bot.commands import CommandsMixin
 from app.discord_bot.lifecycle import LifecycleMixin
 from app.discord_bot.timer import TimerMixin
 from app.discord_bot.views import ViewsMixin, _EditState
+from app.rate_limit import RateLimiter
 from app.session import SessionRegistry
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,10 @@ class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin):
     ) -> None:
         self._conn = conn
         self._registry = registry
+
+        # Per-user sliding-window and per-guild daily-cap rate limiting for
+        # /teamode invocations. In-memory only — resets on restart.
+        self._rate_limiter = RateLimiter(tz=TEAMODE_TIMEZONE)
 
         # Per-session edit state, keyed by session_id.
         # Populated when an active timer message is posted; removed on followup.
