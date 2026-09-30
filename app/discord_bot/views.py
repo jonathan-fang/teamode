@@ -66,6 +66,34 @@ def _format_intention_line(intention: str | None) -> str:
     return INTENTION_LINE_UNSET
 
 
+def _build_active_timer_content(
+    *,
+    intention: str | None,
+    duration_minutes: int | None,
+    seconds_remaining: int,
+    mention_line: str,
+) -> str:
+    """Build the active-timer message content — the ONE place both the
+    initial send and every tick edit build this string, so they can never
+    drift apart.
+
+    ``mention_line`` is the pre-snapshotted @-mention line for the
+    session's non-bot voice members (built once, when the timer message is
+    first sent) — empty when there are none, in which case no extra line
+    is added.
+    """
+    mm, ss = divmod(seconds_remaining, 60)
+    base = ACTIVE_TIMER_FMT.format(
+        intention_line=_format_intention_line(intention),
+        duration=duration_minutes,
+        mm=mm,
+        ss=ss,
+    )
+    if mention_line:
+        return f"{base}\n{mention_line}"
+    return base
+
+
 # ---------------------------------------------------------------------------
 # Per-session edit-state holder
 # ---------------------------------------------------------------------------
@@ -123,6 +151,7 @@ class _ModalBot(Protocol):
     members below (see ``ViewsMixin``), no cast required.
     """
 
+    client: discord.Client
     _registry: SessionRegistry
     _voice_clients: dict[int, discord.VoiceClient]
     _edit_states: dict[int, _EditState]
@@ -140,7 +169,9 @@ class _ModalBot(Protocol):
         channel: discord.abc.Messageable | None,
     ) -> None: ...
 
-    def _on_session_terminal(self, session_id: int) -> None: ...
+    async def _on_session_terminal(
+        self, session_id: int, *, delete_setup_messages: bool = True
+    ) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +242,7 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             logger.exception("Voice connect failed for session %s", self._session_id)
             await interaction.followup.send(MSG_VOICE_CONNECT_FAILED, ephemeral=True)
             self._bot._registry.mark_cancelled(session_id=self._session_id)
-            self._bot._on_session_terminal(self._session_id)
+            await self._bot._on_session_terminal(self._session_id)
             return
 
         # Stash the voice client so the solo-grace flow can disconnect it.
@@ -220,18 +251,32 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         # --- Advance to ACTIVE and post the timer message ---
         self._bot._registry.mark_active(session_id=self._session_id)
         assert session.duration_minutes is not None
-        initial_content = ACTIVE_TIMER_FMT.format(
-            intention_line=_format_intention_line(session.intention),
-            duration=session.duration_minutes,
-            mm=session.duration_minutes,
-            ss=0,
+
+        # Snapshot the @-mention set for non-bot voice members — the same
+        # filter used for the participant prompt — so the initial timer
+        # message pings everyone present. Stored on the edit state so tick
+        # edits reuse it verbatim without re-pinging (see timer.py, which
+        # sends edits with AllowedMentions.none()).
+        bot_id = self._bot.client.user.id if self._bot.client.user else None
+        mention_members = [
+            m for m in voice_channel.members if not m.bot and m.id != bot_id
+        ]
+        mention_line = " ".join(m.mention for m in mention_members)
+
+        initial_content = _build_active_timer_content(
+            intention=session.intention,
+            duration_minutes=session.duration_minutes,
+            seconds_remaining=session.duration_minutes * 60,
+            mention_line=mention_line,
         )
         # Send on the voice channel resolved at click-handler time — the same
         # typed reference used to connect above, so no cast is needed here.
         timer_message = await voice_channel.send(initial_content)
 
         # Stash edit state so the tick callback can reach it.
-        self._bot._edit_states[self._session_id] = _EditState(message=timer_message)
+        self._bot._edit_states[self._session_id] = _EditState(
+            message=timer_message, mention_line=mention_line
+        )
 
         # --- Schedule countdown, then run the full end-of-session sequence ---
         session_id = self._session_id
@@ -282,6 +327,7 @@ class ViewsMixin:
     # can type-check the mixin's own methods in isolation, and so `self`
     # structurally satisfies `_ModalBot` when passed to IntentionModal
     # (see `_ModalBot` above) without a cast.
+    client: discord.Client
     _registry: SessionRegistry
     _voice_clients: dict[int, discord.VoiceClient]
     _edit_states: dict[int, _EditState]
@@ -305,7 +351,9 @@ class ViewsMixin:
             channel: discord.abc.Messageable | None,
         ) -> None: ...
 
-        def _on_session_terminal(self, session_id: int) -> None: ...
+        async def _on_session_terminal(
+            self, session_id: int, *, delete_setup_messages: bool = True
+        ) -> None: ...
 
     async def _handle_timer_pick(
         self,

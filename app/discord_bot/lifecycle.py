@@ -56,21 +56,26 @@ class LifecycleMixin:
     _edit_states: dict[int, _EditState]
     _pending_expiry_tasks: dict[int, asyncio.Task[None]]
     _setup_messages: dict[int, _SetupMessages]
+    _last_end_message_ids: dict[int, int]
 
     # ------------------------------------------------------------------
     # Centralized terminal-state cleanup
     # ------------------------------------------------------------------
 
-    def _on_session_terminal(self, session_id: int) -> None:
+    async def _on_session_terminal(
+        self, session_id: int, *, delete_setup_messages: bool = True
+    ) -> None:
         """Cancel/clear every per-session background task and in-memory
-        state entry for *session_id*.
+        state entry for *session_id*, and (usually) delete its setup
+        messages.
 
-        Called at every terminal transition (completed, followup_timeout,
-        cancelled — including pending expiry and solo-grace timeout).
-        Idempotent: each pop is a no-op when the key is already gone, so
-        callers that already did some of this cleanup themselves are safe
-        to call it again. Later work extends this with setup-message
-        deletion and voice-channel status.
+        Called at every terminal transition. ``delete_setup_messages=True``
+        (the default) deletes the welcome and Set-Intention messages via
+        the channel — used by every terminal path except pending expiry,
+        which edits the welcome message in place instead and passes
+        ``delete_setup_messages=False``. Idempotent: each pop is a no-op
+        when the key is already gone, so callers that already did some of
+        this cleanup themselves are safe to call it again.
         """
         current = asyncio.current_task()
         for task_map in (
@@ -84,6 +89,35 @@ class LifecycleMixin:
                 task.cancel()
         self._edit_states.pop(session_id, None)
         self._voice_clients.pop(session_id, None)
+
+        if not delete_setup_messages:
+            return
+
+        setup = self._setup_messages.pop(session_id, None)
+        if setup is None:
+            return
+
+        channel = self.client.get_channel(setup.channel_id)
+        if not isinstance(channel, discord.VoiceChannel):
+            logger.warning(
+                "Channel %s for session %s is not a VoiceChannel —"
+                " skipping setup-message deletion",
+                setup.channel_id,
+                session_id,
+            )
+            return
+
+        for message_id in (setup.welcome_message_id, setup.intention_message_id):
+            if message_id is None:
+                continue
+            try:
+                await channel.get_partial_message(message_id).delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.warning(
+                    "Failed to delete setup message %s for session %s",
+                    message_id,
+                    session_id,
+                )
 
     # ------------------------------------------------------------------
     # Pending-session expiry
@@ -153,7 +187,7 @@ class LifecycleMixin:
             session_id,
             sleep_seconds,
         )
-        self._on_session_terminal(session_id)
+        await self._on_session_terminal(session_id, delete_setup_messages=False)
 
     async def _run_end_of_session(
         self,
@@ -199,7 +233,16 @@ class LifecycleMixin:
             description=f"### {END_EMBED_BODY}",
             color=COLORS["end_of_session"],
         )
-        await channel.send(content=mention_content, embed=session_complete_embed)
+        end_message = await channel.send(
+            content=mention_content, embed=session_complete_embed
+        )
+
+        # Remember this "Time's up" message so the *next* /teamode invoked
+        # in the same text channel can delete it (see CommandsMixin —
+        # in-memory only, lost on restart, which is accepted).
+        channel_id = getattr(channel, "id", None)
+        if channel_id is not None:
+            self._last_end_message_ids[channel_id] = end_message.id
 
         # Step c: Reverie playback + disconnect.
         playback_ok = await voice.play_reverie_then_disconnect(voice_client)
@@ -242,7 +285,7 @@ class LifecycleMixin:
                 "Follow-up watchdog fired for session %s — marked followup_timeout",
                 session_id,
             )
-            self._on_session_terminal(session_id)
+            await self._on_session_terminal(session_id)
 
         task = spawn_logged(_watchdog(), name=f"followup-watchdog:{session_id}")
         self._watchdog_tasks[session_id] = task
@@ -305,7 +348,7 @@ class LifecycleMixin:
                 completed_intention=1,
                 followup_note=None,
             )
-            self._on_session_terminal(session_id)
+            await self._on_session_terminal(session_id)
         else:
             # ⛔ — record incomplete, then post the "why" prompt.
             self._registry.mark_completed(
@@ -313,7 +356,7 @@ class LifecycleMixin:
                 completed_intention=0,
                 followup_note=None,
             )
-            self._on_session_terminal(session_id)
+            await self._on_session_terminal(session_id)
             channel = self.client.get_channel(int(session.text_channel_id))
             if isinstance(channel, discord.abc.Messageable):
                 await channel.send(
@@ -496,4 +539,4 @@ class LifecycleMixin:
                 session_id,
             )
 
-        self._on_session_terminal(session_id)
+        await self._on_session_terminal(session_id)

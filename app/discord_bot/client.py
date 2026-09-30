@@ -75,6 +75,11 @@ class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin):
         # the channel (never the interaction webhook).
         self._setup_messages: dict[int, _SetupMessages] = {}
 
+        # The most recent "Time's up" message id per text-channel id.
+        # In-memory only — lost on restart (accepted). Deleted when the
+        # next session starts in that channel.
+        self._last_end_message_ids: dict[int, int] = {}
+
         intents = discord.Intents.default()
         intents.guilds = True
         intents.voice_states = True

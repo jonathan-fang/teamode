@@ -50,6 +50,7 @@ class CommandsMixin:
     _registry: SessionRegistry
     _rate_limiter: RateLimiter
     _setup_messages: dict[int, _SetupMessages]
+    _last_end_message_ids: dict[int, int]
 
     if TYPE_CHECKING:
         # Provided by LifecycleMixin — declared here, type-checking only,
@@ -173,6 +174,24 @@ class CommandsMixin:
             facilitator_id=str(interaction.user.id),
         )
 
+        # Delete the previous session's "Time's up" message in this channel,
+        # if any — this also covers a future "Go again" button reusing this
+        # same start path. Best-effort: failures are logged, never fatal.
+        previous_end_message_id = self._last_end_message_ids.pop(
+            interaction.channel.id, None
+        )
+        if previous_end_message_id is not None:
+            try:
+                await interaction.channel.get_partial_message(
+                    previous_end_message_id
+                ).delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.warning(
+                    "Failed to delete previous Time's up message %s in channel %s",
+                    previous_end_message_id,
+                    interaction.channel.id,
+                )
+
         # Build the welcome embed.
         embed = _build_welcome_embed()
 
@@ -208,7 +227,14 @@ class CommandsMixin:
         else:
             mentions_prefix = ""
         participant_prompt = MSG_PARTICIPANT_PROMPT.format(mentions=mentions_prefix)
-        await interaction.followup.send(participant_prompt, ephemeral=False)
+        # wait=True to get the WebhookMessage id — deleted via the channel
+        # (never the webhook) at every non-expiry terminal state.
+        intention_message = await interaction.followup.send(
+            participant_prompt, ephemeral=False, wait=True
+        )
+        setup = self._setup_messages.get(session.session_id)
+        if setup is not None:
+            setup.intention_message_id = intention_message.id
 
     async def _handle_handoff(
         self, interaction: discord.Interaction, member: discord.Member
