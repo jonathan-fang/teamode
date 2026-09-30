@@ -1,6 +1,6 @@
 ---
 title: TeaMode v26Q3.0.0.0
-modified: /teamode-clear delete pacing and own-author filter after the 4.2 smoke test. Earlier: break refinements per User decision after the 4.1 smoke test (long-break streak offer, bot stays in voice during breaks with break voice statuses). Earlier: voice status while-connected (option B), Stage 3 refinements. Modified by the Manager.
+modified: Stats copy decisions (no-rate row, singular forms, hidden zero streak) and banner wrapper before 5.1/5.2. Earlier: /teamode-clear delete pacing and own-author filter after the 4.2 smoke test. Earlier: break refinements per User decision after the 4.1 smoke test (long-break streak offer, bot stays in voice during breaks with break voice statuses). Earlier: voice status while-connected (option B), Stage 3 refinements. Modified by the Manager.
 ---
 
 # APM Spec
@@ -233,7 +233,7 @@ Shown on the welcome message, inside a code block. Canonical art (candidate #2, 
   '-------'
 ```
 
-Stored in `app/constants.py` as `TEACUP_BANNER`.
+Stored in `app/constants.py` as `TEACUP_BANNER`, wrapped by `WELCOME_BANNER_BLOCK` (code fence) at the top of the welcome embed description.
 
 ## Typing and Tooling
 
@@ -321,8 +321,10 @@ All strings below are User-approved and must be used verbatim (placeholders in `
 | `STATS_TITLE` | `🍵 TeaMode stats` |
 | Section names | `You`, `This server` |
 | Row labels | `Last 7 days`, `Last 30 days`, `All time` |
-| Row value | `{n} sessions · {minutes} min · {rate}% completed` |
+| Row value | `STATS_ROW_VALUE` `{sessions} · {minutes} min · {rate}% completed`; `STATS_ROW_VALUE_NO_RATE` `{sessions} · {minutes} min · — completed` when no ✅/⛔ answers (User decision) |
+| `STATS_SESSIONS` / `STATS_SESSIONS_ONE` | `{n} sessions` / `1 session` (User decision: singular forms) |
 | `STATS_STREAK` | `🔥 Streak: {days} days` |
+| `STATS_STREAK_ONE` | `🔥 Streak: 1 day`; streak line hidden when 0 (User decision) |
 | `STATS_EMPTY` | `No sessions yet — run /teamode to start one.` |
 
 ### `/teamode-clear`

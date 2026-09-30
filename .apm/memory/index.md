@@ -23,6 +23,8 @@ title: TeaMode v26Q3.0.0.0
 - Sound credits for README: wind chime by GnoteSoundz (CC0); reverie by Seemant Chandra (Instagram: piyush.x_x) — do not mention or link the source project. Repo is private.
 - Auto-handoff (random among remaining humans) exists from the MVP but is still unverified live; needs a second account.
 - The User may postpone individual smoke-test steps "to production"; record each postponed check as an entry in `TODO.md` § Notes (User wants them there) and commit it with the Stage's APM artifacts.
+- `scripts/teamode_launcher.sh` dev mode runs whatever branch is checked out in the repo dir: keep a branch under User test checked out until tested; run concurrent Workers in a worktree under `.apm/worktrees/` (symlink `.venv`; never stage it). Worktrees under `.apm/` trip the injection scan with false positives from repo docs.
+- The User is token-budget conscious late in sessions; keep reports terse.
 - Discord API pacing: prefer proactive pacing (tunable interval in `app/constants.py`) over relying on discord.py 429 retries for loops of API calls — the User reads the terminal and treats 429 WARNINGs as defects.
 
 ## Stage Summaries
@@ -65,3 +67,20 @@ Stage 4 grew from two to three Bot Engineer Tasks and landed in two merges. Task
 - task-04-01.log.md
 - task-04-02.log.md
 - task-04-03.log.md
+
+### Stage 5 - Extras: Stats, Teacup Banner, Art Assets
+
+Stage 5 ran as a Bot Engineer batch (5.1 + 5.2) and an Asset Designer Task (5.3). Before dispatch the User settled three stats copy gaps (`— completed` when no answers, singular `1 session` / `1 day`, zero streak hidden); the Manager pre-added those constants plus `WELCOME_BANNER_BLOCK` (`27a5116`). The batch added db read helpers, pure `app/stats.py`, `StatsMixin` for `/teamode-stats`, and the teacup banner at the top of the welcome embed (`89fe281`, `60c1891`, `ca3035a`); the User confirmed both in Discord and it merged as `ca9c6bd`. The Manager had switched the repo dir to the art branch before the User tested, so the launcher ran code without `/teamode-stats`; restored by checking the stats branch back out — later Worker runs used a worktree to keep the repo dir stable. 5.3's first design had a detached handle and floating cup; the User asked for three candidates per image in `.debug-images/` (`c12dca6`: fixed cup, kettle pouring, monoline badge) and chose candidate 1 for all three, committed as `app-icon.png`, `app-banner.png`, `app-avatar.png` (`3965d58`); merged as `3f4122a`. Suite at 330 tests.
+
+**Task Logs:**
+- task-05-01.log.md
+- task-05-02.log.md
+- task-05-03.log.md
+
+### Stage 6 - Documentation and Release Prep
+
+With the User's go-ahead, 6.1 was dispatched while 5.3 awaited the art pick. The Docs Writer synced README (commands, env vars, permissions and invite integer `281477127425088`, ffmpeg, `~/.teamode-secrets` launcher sample, sound credits without the reverie's source project), UI-ADR, conventions, schema doc, AGENTS.md (APM_RULES and Working Preferences unchanged), a `v26Q3.0.0.0` changelog entry with both PyNaCl PYSEC IDs, and TODO (`8f1c26a`, `523f2e0`). The Manager recorded the chosen art as shipped (`0a31e0c`, after catching and redoing an over-broad TODO edit); merged as `07227a8`. Tag and push await User approval.
+
+**Task Logs:**
+- task-06-01.log.md
+
