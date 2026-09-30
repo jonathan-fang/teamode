@@ -1,6 +1,7 @@
-"""SQLite schema and write helpers for TeaMode session state."""
+"""SQLite schema and write/read helpers for TeaMode session state."""
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -221,6 +222,73 @@ def update_cancelled(
         (ts, session_id),
     )
     conn.commit()
+
+
+_QUALIFYING_STATUSES = ("completed", "followup_timeout")
+
+
+@dataclass(frozen=True)
+class StatsSessionRow:
+    """One session row relevant to /teamode-stats aggregation."""
+
+    started_at: str
+    duration_minutes: int | None
+    completed_intention: int | None
+
+
+def _row_to_stats_row(row: tuple[str, int | None, int | None]) -> StatsSessionRow:
+    started_at, duration_minutes, completed_intention = row
+    return StatsSessionRow(
+        started_at=started_at,
+        duration_minutes=duration_minutes,
+        completed_intention=completed_intention,
+    )
+
+
+def fetch_facilitator_stats_rows(
+    conn: sqlite3.Connection,
+    *,
+    facilitator_id: str,
+) -> list[StatsSessionRow]:
+    """Return qualifying sessions originally facilitated by *facilitator_id*.
+
+    Qualifying means ``status`` reached follow-up
+    (``'completed'`` or ``'followup_timeout'``). Filters on the ORIGINAL
+    ``facilitator_id`` — a handoff target recorded in
+    ``handoff_facilitator_id`` gets no credit here.
+    """
+    placeholders = ",".join("?" * len(_QUALIFYING_STATUSES))
+    cur = conn.execute(
+        f"""
+        SELECT started_at, duration_minutes, completed_intention
+        FROM sessions
+        WHERE facilitator_id = ? AND status IN ({placeholders})
+        """,  # noqa: S608
+        (facilitator_id, *_QUALIFYING_STATUSES),
+    )
+    return [_row_to_stats_row(row) for row in cur.fetchall()]
+
+
+def fetch_guild_stats_rows(
+    conn: sqlite3.Connection,
+    *,
+    guild_id: str,
+) -> list[StatsSessionRow]:
+    """Return qualifying sessions started in *guild_id*.
+
+    Qualifying means ``status`` reached follow-up
+    (``'completed'`` or ``'followup_timeout'``).
+    """
+    placeholders = ",".join("?" * len(_QUALIFYING_STATUSES))
+    cur = conn.execute(
+        f"""
+        SELECT started_at, duration_minutes, completed_intention
+        FROM sessions
+        WHERE guild_id = ? AND status IN ({placeholders})
+        """,  # noqa: S608
+        (guild_id, *_QUALIFYING_STATUSES),
+    )
+    return [_row_to_stats_row(row) for row in cur.fetchall()]
 
 
 def reconcile_crashed_sessions(conn: sqlite3.Connection) -> int:
