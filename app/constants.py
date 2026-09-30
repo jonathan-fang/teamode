@@ -175,15 +175,23 @@ VOICE_STATUS_BREAK_OVER = "✨ Break over at {hhmm}"
 # ---------------------------------------------------------------------------
 
 TIMER_EMBED_TITLE = "🍵 TeaMode • {duration} min session"
-TIMER_FIELD_INTENTION = "Intention"
+TIMER_FIELD_INTENTION = "Facilitator's Intention"
 TIMER_FIELD_FACILITATOR = "Facilitator"
 TIMER_FIELD_RANGE = "Range"
 TIMER_TIME_RANGE = "{start} to {end}"
 PHASE_DEEP_FOCUS = "Deep focus"
 PHASE_WRAP_UP = "Wrap up — finish your current task"
-TIMER_REMAINING = "{mmss} remaining"
+TIMER_REMAINING = "⏳ {mmss} remaining"
 TIMER_PROGRESS = "{bar} {percent}%"
 TIMER_CONTENT = "⏳ {mmss} remaining"
+
+# Finalized plain-text session record — replaces the fielded timer embed at
+# session end, so the intention/facilitator/range history that persists in
+# the channel long-term is a compact plain-text block instead of a lingering
+# embed (see app.discord_bot.views._build_session_record_content).
+SESSION_RECORD_INTENTION_SET = "🍵 Facilitator's Intention: {intention}"
+SESSION_RECORD_INTENTION_UNSET = "🍵 No intention set"
+SESSION_RECORD_META = "{duration} min session · Facilitated by <@{facilitator_id}>"
 
 # ---------------------------------------------------------------------------
 # New copy — chaining and breaks (used later)
@@ -220,7 +228,7 @@ MSG_WRAP_UP_NUDGE_ONE = "⏰ Wrap-up nudge — 1 minute left."
 MSG_PENDING_EXPIRED = "🍵 Expired"
 
 # ---------------------------------------------------------------------------
-# New copy — /teamode-stats (used later)
+# New copy — /stats (used later)
 # ---------------------------------------------------------------------------
 
 STATS_COMMAND_DESCRIPTION = "Show TeaMode stats for you and this server."
@@ -243,7 +251,7 @@ STATS_STREAK_ONE = "🔥 Streak: 1 day"
 STATS_EMPTY = "No sessions yet — run /teamode to start one."
 
 # ---------------------------------------------------------------------------
-# New copy — /teamode-clear (used later)
+# New copy — /clear (used later)
 # ---------------------------------------------------------------------------
 
 CLEAR_COMMAND_DESCRIPTION = (
@@ -251,7 +259,7 @@ CLEAR_COMMAND_DESCRIPTION = (
 )
 CLEAR_DONE = "🧹 Cleared {n} messages."
 CLEAR_NOTHING = "Nothing to clear."
-CLEAR_NO_PERMISSION = "You need the Manage Messages permission to run /teamode-clear."
+CLEAR_NO_PERMISSION = "You need the Manage Messages permission to run /clear."
 
 # ---------------------------------------------------------------------------
 # New copy — welcome banner (used later)

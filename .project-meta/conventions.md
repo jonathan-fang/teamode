@@ -96,7 +96,7 @@ outlast that. Discord edit/delete/status calls that fail (`NotFound`,
 the session flow.
 
 **Pace loops of Discord API calls proactively.** When a loop issues
-several Discord API calls in sequence (e.g. `/teamode-clear` deleting
+several Discord API calls in sequence (e.g. `/clear` deleting
 many messages), space them out with an explicit interval constant
 rather than leaning on 429 retries to keep you under the rate limit —
 a retry-driven approach wastes calls and risks cascading backoff under

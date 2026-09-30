@@ -1,4 +1,4 @@
-"""The /teamode-clear command: deletes past TeaMode clutter in a channel."""
+"""The /clear command: deletes past TeaMode clutter in a channel."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class ClearMixin:
-    """The /teamode-clear command, mixed into :class:`TeaModeBot`."""
+    """The /clear command, mixed into :class:`TeaModeBot`."""
 
     # Attributes provided by TeaModeBot.__init__ — declared here so pyright
     # can type-check this mixin's own methods in isolation.
@@ -41,17 +41,17 @@ class ClearMixin:
     _break_states: dict[int, _BreakState]
 
     def _register_clear_command(self) -> None:
-        """Register /teamode-clear on the command tree."""
+        """Register /clear on the command tree."""
 
         @self.tree.command(
-            name="teamode-clear",
+            name="clear",
             description=CLEAR_COMMAND_DESCRIPTION,
         )
-        async def teamode_clear(interaction: discord.Interaction) -> None:
+        async def clear(interaction: discord.Interaction) -> None:
             await self._handle_clear(interaction)
 
     def _protected_message_ids(self, channel_id: int) -> set[int]:
-        """Return message ids to keep in *channel_id* for /teamode-clear.
+        """Return message ids to keep in *channel_id* for /clear.
 
         Covers the channel's non-terminal session (if any) — its timer
         message, its welcome / Set-Intention / nudge messages, and its
@@ -113,7 +113,7 @@ class ClearMixin:
         return protected
 
     async def _handle_clear(self, interaction: discord.Interaction) -> None:
-        """Handle /teamode-clear.
+        """Handle /clear.
 
         Guard → defer ephemeral → scan up to ``CLEAR_SCAN_LIMIT`` messages
         of channel history → delete each bot-authored, non-protected,
@@ -159,7 +159,7 @@ class ClearMixin:
                 await message.delete()
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 logger.warning(
-                    "Failed to delete message %s in channel %s via /teamode-clear",
+                    "Failed to delete message %s in channel %s via /clear",
                     message.id,
                     channel_id,
                 )
@@ -179,7 +179,7 @@ class ClearMixin:
                     cleanup.why_id = None
 
         logger.info(
-            "Cleared %s message(s) in channel %s via /teamode-clear",
+            "Cleared %s message(s) in channel %s via /clear",
             deleted_count,
             channel_id,
         )

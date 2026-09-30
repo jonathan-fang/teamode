@@ -116,12 +116,16 @@ until promoted.
   chain prompt is back to the normal 5-minute offer; (5) `/teamode`
   during a break makes Ocha leave voice, edits the message to "Break
   cancelled by /teamode", and the new session connects normally.
-- **`/teamode-clear` permission refusal — manual Discord check
-  postponed; observe in production.** Run `/teamode-clear` as a member
+- **`/clear` permission refusal — manual Discord check
+  postponed; observe in production.** Run `/clear` as a member
   without Manage Messages and confirm the ephemeral refusal "You need
-  the Manage Messages permission to run /teamode-clear." (other smoke
+  the Manage Messages permission to run /clear." (other smoke
   steps passed; delete pacing via `CLEAR_DELETE_INTERVAL_SECONDS`).
 
-minor detail for name of cmds in teamode, clear, stats, handoff or like teamode-handoff? Probably teamode handoff? Auto completion in discord easier to see all teamode related commands from input text bar
+Command naming — resolved: `/teamode-clear` and `/teamode-stats` were
+shortened to `/clear` and `/stats`; `/teamode` and `/handoff` stay
+as-is. Discoverability handled via Discord's per-app command filter
+(type the bot's name, e.g. `/ocha`, in the slash-command picker) rather
+than prefixing every command with `teamode-` — documented in README.
 - [ ] Apparently ocha doesn't need manage messages to delete it's own messages, including old ones? So I could have it so that anybody can trigger it, is that desired? Minor to input in Todo md, not planning to touch it for another quarter. There will never be a time a codebase considered nothing can be improved or change because circumstances change .
 - [ ] minor generate art doesn't really belong in git it's a one time thing ...? Also ai art controversial atm 

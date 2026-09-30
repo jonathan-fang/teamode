@@ -1,4 +1,4 @@
-"""Pure aggregation and copy-rendering for /teamode-stats.
+"""Pure aggregation and copy-rendering for /stats.
 
 No ``discord`` import — callers pass ``now`` (aware) and ``tz`` in
 explicitly, the same way ``app/timer_format.py`` stays Discord-free so it

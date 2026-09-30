@@ -1,4 +1,4 @@
-"""The /teamode-stats command: sessions, focus minutes and completion rate."""
+"""The /stats command: sessions, focus minutes and completion rate."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from app.stats import (
 
 
 class StatsMixin:
-    """The /teamode-stats command, mixed into :class:`TeaModeBot`."""
+    """The /stats command, mixed into :class:`TeaModeBot`."""
 
     # Attributes provided by TeaModeBot.__init__ — declared here so pyright
     # can type-check this mixin's own methods in isolation.
@@ -36,17 +36,17 @@ class StatsMixin:
     _conn: sqlite3.Connection
 
     def _register_stats_command(self) -> None:
-        """Register /teamode-stats on the command tree."""
+        """Register /stats on the command tree."""
 
         @self.tree.command(
-            name="teamode-stats",
+            name="stats",
             description=STATS_COMMAND_DESCRIPTION,
         )
-        async def teamode_stats(interaction: discord.Interaction) -> None:
+        async def stats(interaction: discord.Interaction) -> None:
             await self._handle_stats(interaction)
 
     async def _handle_stats(self, interaction: discord.Interaction) -> None:
-        """Handle /teamode-stats: an ephemeral embed of You / This server stats."""
+        """Handle /stats: an ephemeral embed of You / This server stats."""
         if interaction.guild_id is None:
             await interaction.response.send_message(MSG_WRONG_CHANNEL, ephemeral=True)
             return

@@ -1,4 +1,4 @@
-"""Tests for /teamode-stats: db read helpers, pure aggregation, and the command.
+"""Tests for /stats: db read helpers, pure aggregation, and the command.
 
 Covers: only completed/followup_timeout rows count, 7d/30d/all-time window
 filtering, completion rate (undefined when no ✅/⛔ answers), singular
@@ -313,7 +313,7 @@ def test_empty_summary_has_zero_sessions(conn: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The /teamode-stats command
+# The /stats command
 # ---------------------------------------------------------------------------
 
 

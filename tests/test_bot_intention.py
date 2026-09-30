@@ -316,7 +316,7 @@ async def test_modal_submit_records_intention_and_posts_timer(
     sent_embed: discord.Embed = timer_call.kwargs["embed"]
     assert sent_embed.title == TIMER_EMBED_TITLE.format(duration=25)
     field_values = {f.name: f.value for f in sent_embed.fields}
-    assert field_values["Intention"] == "finish the changelog"
+    assert field_values["Facilitator's Intention"] == "finish the changelog"
 
     # voice.connect called with the channel passed at modal-construction time
     # (no REST fetch_channel call occurs).

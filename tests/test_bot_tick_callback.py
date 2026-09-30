@@ -202,7 +202,7 @@ async def test_edit_content_format(bot: TeaModeBot, registry: SessionRegistry) -
     embed = call_kwargs["embed"]
     assert embed.color == COLORS["active"]
     field_values = {f.name: f.value for f in embed.fields}
-    assert field_values["Intention"] == "test intention"
+    assert field_values["Facilitator's Intention"] == "test intention"
     assert PHASE_DEEP_FOCUS in embed.description
     # AllowedMentions has no __eq__, so compare the flag that matters.
     assert call_kwargs["allowed_mentions"].users is False
@@ -507,8 +507,8 @@ async def test_long_intention_truncated_in_field(
 
     embed = fake_msg.edit.call_args.kwargs["embed"]
     field_values = {f.name: f.value for f in embed.fields}
-    assert len(field_values["Intention"]) <= 1024
-    assert field_values["Intention"].endswith("…")
+    assert len(field_values["Facilitator's Intention"]) <= 1024
+    assert field_values["Facilitator's Intention"].endswith("…")
 
 
 def test_started_at_field_shows_start_to_end_range() -> None:

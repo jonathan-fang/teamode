@@ -173,7 +173,7 @@ handoff occurred.
 
 ## Stats read helpers
 
-`/teamode-stats` reads through two helpers in `app/db.py` rather than
+`/stats` reads through two helpers in `app/db.py` rather than
 inline SQL in the Discord-facing layer:
 
 - **`fetch_facilitator_stats_rows(conn, *, facilitator_id)`** —

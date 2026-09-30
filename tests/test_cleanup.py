@@ -1,4 +1,4 @@
-"""Tests for the pure /teamode-clear message classifier (app/cleanup.py).
+"""Tests for the pure /clear message classifier (app/cleanup.py).
 
 Fixture strings are built by formatting the constants themselves, never
 hand-written literals, so classification stays derived from
@@ -26,10 +26,13 @@ from app.constants import (
     MSG_WRAP_UP_NUDGE,
     MSG_WRAP_UP_NUDGE_ONE,
     REFLECT_EMBED_TITLE,
+    SESSION_RECORD_INTENTION_SET,
+    SESSION_RECORD_META,
     SOLO_GRACE_ENDED,
     STREAK_DURATION_ITEM,
     STREAK_DURATION_SEPARATOR,
     TIMER_EMBED_TITLE,
+    TIMER_TIME_RANGE,
     WELCOME_EMBED_TITLE,
 )
 
@@ -185,3 +188,15 @@ def test_unrelated_bot_message_is_never_delete_eligible() -> None:
 
 def test_arbitrary_text_is_never_delete_eligible() -> None:
     assert not is_delete_eligible(content="", embed_titles=["Some other embed"])
+
+
+def test_finalized_session_record_is_never_delete_eligible() -> None:
+    # The plain-text record a timer message is rewritten to at session end
+    # (embed stripped) matches no delete-eligible rule, so it falls through
+    # to the default False — protected without any dedicated classifier
+    # rule needed.
+    intention_line = SESSION_RECORD_INTENTION_SET.format(intention="ship it")
+    meta_line = SESSION_RECORD_META.format(duration=25, facilitator_id="111")
+    range_line = TIMER_TIME_RANGE.format(start="14:00", end="14:25")
+    content = f"{intention_line}\n{meta_line}\n{range_line}"
+    assert not is_delete_eligible(content=content, embed_titles=[])

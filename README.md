@@ -13,14 +13,16 @@ A self-hosted Discord bot that runs FLOWN/Groove-style guided co-working
 sessions in voice channels. Built around `/teamode` — a facilitator-led
 flow that walks you and your friends through a focus block: pick a
 duration, write your intention, focus, hear the reverie chime, reflect —
-plus `/handoff`, `/teamode-stats`, and `/teamode-clear` around it.
+plus `/handoff`, `/stats`, and `/clear` around it. All of Ocha's
+commands can be filtered together in Discord's slash-command picker by
+typing the bot's name (e.g. `/ocha`).
 
 The bot user is named **Ocha** (お茶 — tea). It's tiny, opinionated, and
 designed to replace the Japanese `simple-timer` bot a small group of
 friends were already using.
 
 > **Status:** `v26Q3.0.0.0` shipped. Chained sessions, breaks, the embed
-> timer, `/teamode-stats`, and `/teamode-clear` are live. See
+> timer, `/stats`, and `/clear` are live. See
 > `changelog.md` for what landed.
 
 ---
@@ -45,7 +47,7 @@ friends were already using.
   ⌨  Modal: "What will you focus on?"   (optional — can be left blank)
 
   🍵 TeaMode • 25 min session           ← embed, edits every 10 seconds
-     Intention: Finish the v26Q3 changelog
+     Facilitator's Intention: Finish the v26Q3 changelog
      Facilitator: @you
      Range: 14:00 to 14:25
      Deep focus                        ← → "Wrap up" for the last 3 minutes
@@ -53,6 +55,11 @@ friends were already using.
      █████████░ 92%
 
   ⏰ Wrap-up nudge — 3 minutes left.    ← sessions ≥ 10 min, + wind chime
+
+  🍵 Facilitator's Intention: Finish the v26Q3 changelog
+     25 min session · Facilitated by @you
+     14:00 to 14:25                    ← embed stripped; plain text stays
+                                          as the permanent channel record
 
   ✨ Session complete!
      ### 🌿 Sip your tea, stretch, and notice your progress.
@@ -72,7 +79,7 @@ friends were already using.
 
 Every session is recorded to a local SQLite database — duration,
 intention, follow-up answer — so you can look back at what you've done
-and what you set out to do, or check `/teamode-stats`.
+and what you set out to do, or check `/stats`.
 
 ---
 
@@ -85,18 +92,21 @@ and what you set out to do, or check `/teamode-stats`.
 - **`/handoff @user`** — manually transfer the facilitator role to
   another voice-channel member. Also happens automatically if the
   facilitator leaves voice with others remaining.
-- **`/teamode-stats`** — ephemeral summary of your sessions and this
+- **`/stats`** — ephemeral summary of your sessions and this
   server's, over the last 7 days / 30 days / all time, plus your
   personal daily streak.
-- **`/teamode-clear`** (requires Manage Messages) — deletes Ocha's own
+- **`/clear`** (requires Manage Messages) — deletes Ocha's own
   past TeaMode clutter from the last 800 messages in the channel,
   paced to stay under Discord's rate limits. Keeps timers, handoff
   notices, and anything belonging to a live session, chain prompt, or
   break.
-- **Embed timer** with an intention/facilitator/range layout, a
-  `Deep focus` → `Wrap up` phase shift, `MM:SS remaining`, and a
-  progress bar. A wrap-up nudge (with a wind chime in voice) fires for
-  sessions ≥ 10 minutes.
+- **Embed timer** with a Facilitator's Intention/facilitator/range
+  layout, a `Deep focus` → `Wrap up` phase shift, `MM:SS remaining`,
+  and a progress bar. A wrap-up nudge (with a wind chime in voice)
+  fires for sessions ≥ 10 minutes. At session end, the embed is
+  stripped and the message finalizes to a compact plain-text record
+  (intention, duration + facilitator, time range) that stays as the
+  permanent channel history.
 - **Chained sessions and breaks.** After each session, anyone in voice
   can click "Go again" or "Take a 5-minute break." After two chained
   sessions ≥ 25 minutes, the prompt offers a 10-minute break instead.
@@ -169,9 +179,12 @@ export TEAMODE_TIMEZONE="America/Los_Angeles"       # optional; IANA name, this 
 python3 teamode.py
 ```
 
-The bot logs in, syncs `/teamode`, `/handoff`, `/teamode-stats`, and
-`/teamode-clear` to each guild in `TEAMODE_DEV_GUILD_ID`, and waits
-for invocations.
+The bot logs in, syncs `/teamode`, `/handoff`, `/stats`, and
+`/clear` to each guild in `TEAMODE_DEV_GUILD_ID`, and waits
+for invocations. In Discord's slash-command picker, typing the bot's
+name (e.g. `/ocha`) filters to just Ocha's commands, which is an easy
+way to see all of them together without prefixing every command name
+with `teamode-`.
 
 ### Launcher
 
@@ -235,7 +248,7 @@ permissions (no privileged gateway intents required):
 Combined invite permissions integer: **`281477127425088`**.
 
 TeaMode does **not** request Manage Messages or Manage Channels — even
-`/teamode-clear` runs under the invoking member's own permission, not
+`/clear` runs under the invoking member's own permission, not
 the bot's.
 
 **Adding "Set Voice Channel Status" to an existing bot role:** open
@@ -285,7 +298,7 @@ teamode/
 │   ├── rate_limit.py            ← per-user/per-guild rate limiting
 │   ├── timer_format.py          ← mm:ss / progress bar formatting
 │   ├── stats.py                 ← stats aggregation
-│   ├── cleanup.py               ← /teamode-clear message classification
+│   ├── cleanup.py               ← /clear message classification
 │   └── pidlock.py               ← single-instance PID lock
 ├── assets/                      ← reverie.wav, wind-chime.wav
 ├── scripts/                     ← teamode_launcher.sh, generate_art.py (dev-only)

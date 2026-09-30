@@ -30,6 +30,9 @@ from app.constants import (
     MSG_SESSION_INACTIVE,
     MSG_VOICE_CONNECT_FAILED,
     PHASE_DEEP_FOCUS,
+    SESSION_RECORD_INTENTION_SET,
+    SESSION_RECORD_INTENTION_UNSET,
+    SESSION_RECORD_META,
     TEACUP_BANNER,
     TIMER_BUTTON_LABEL,
     TIMER_CONTENT,
@@ -141,6 +144,40 @@ def _build_timer_message(
     if mention_line:
         content = f"{content}\n{mention_line}"
     return content, embed
+
+
+def _build_session_record_content(
+    *,
+    intention: str | None,
+    duration_minutes: int,
+    facilitator_id: str,
+    started_at: datetime,
+) -> str:
+    """Build the plain-text record a finished session's timer message is
+    rewritten to at session end (see LifecycleMixin._run_end_of_session).
+
+    Replaces the fielded timer embed with a compact, permanent plain-text
+    block — intention, then duration + facilitator, then the time range —
+    so the channel's long-term history isn't a lingering multi-field embed.
+    """
+    intention_value = intention.strip() if intention and intention.strip() else None
+    intention_line = (
+        SESSION_RECORD_INTENTION_SET.format(
+            intention=_truncate_field_value(intention_value)
+        )
+        if intention_value is not None
+        else SESSION_RECORD_INTENTION_UNSET
+    )
+    meta_line = SESSION_RECORD_META.format(
+        duration=duration_minutes, facilitator_id=facilitator_id
+    )
+    range_line = TIMER_TIME_RANGE.format(
+        start=timer_format.format_hhmm(started_at, TEAMODE_TIMEZONE),
+        end=timer_format.format_hhmm(
+            started_at + timedelta(minutes=duration_minutes), TEAMODE_TIMEZONE
+        ),
+    )
+    return f"{intention_line}\n{meta_line}\n{range_line}"
 
 
 # ---------------------------------------------------------------------------
@@ -450,8 +487,9 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
                 on_tick=lambda s: self._bot._on_countdown_tick(session_id, s),
             )
             self._bot._registry.mark_followup(session_id=session_id)
-            # Clean up edit state and per-session resource dicts.
-            self._bot._edit_states.pop(session_id, None)
+            # Clean up per-session resource dicts. _edit_states is left for
+            # _run_end_of_session to consume (it finalizes the timer message
+            # from it) and pop itself.
             self._bot._voice_clients.pop(session_id, None)
             self._bot._countdown_tasks.pop(session_id, None)
             # Run the full end-of-session sequence.

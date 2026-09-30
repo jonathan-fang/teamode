@@ -229,7 +229,7 @@ _QUALIFYING_STATUSES = ("completed", "followup_timeout")
 
 @dataclass(frozen=True)
 class StatsSessionRow:
-    """One session row relevant to /teamode-stats aggregation."""
+    """One session row relevant to /stats aggregation."""
 
     started_at: str
     duration_minutes: int | None

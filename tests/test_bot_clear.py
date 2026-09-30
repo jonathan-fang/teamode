@@ -1,4 +1,4 @@
-"""Tests for the /teamode-clear command.
+"""Tests for the /clear command.
 
 Covers: permission refusal, wrong-channel refusal, scan depth
 (``CLEAR_SCAN_LIMIT``), non-bot messages kept, every kind of protected
@@ -85,7 +85,7 @@ class _FakeEmbed:
 
 
 class FakeMessage:
-    """Minimal stand-in for discord.Message — only what /teamode-clear reads."""
+    """Minimal stand-in for discord.Message — only what /clear reads."""
 
     def __init__(
         self,

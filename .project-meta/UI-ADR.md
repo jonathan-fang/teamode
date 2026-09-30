@@ -57,7 +57,7 @@ sparingly:
 - 🥅 — accent on goal-setting (`[Set Intention]` prompt)
 - ⏰ — wrap-up nudge
 - ⏸️ — break started / break voice status
-- 🧹 — `/teamode-clear` completion
+- 🧹 — `/clear` completion
 - 🔥 — stats streak line
 - ✅ / ⛔ — follow-up reactions on the Reflect-embed message.
   Pre-populated by the bot. The current facilitator's reaction is
@@ -76,7 +76,7 @@ Do not introduce new emoji without updating this section.
 | Timer-pick button row | Same message as welcome | 5 / 10 / 25 / 50 minute buttons | Yes — buttons |
 | Participant `[Set Intention]` prompt | Voice channel's text chat, plain text | Posted 1s after welcome embed; @-mentions all current voice members (bot filtered) | No (display) |
 | Intention modal | Triggered by timer-pick | Free-form text capture, up to `INTENTION_MAX_LENGTH` (4000) chars | Yes — modal |
-| Active timer embed | Same channel | `TIMER_EMBED_TITLE`, Intention/Facilitator/Range fields, phase label, `MM:SS remaining` + progress bar; edits every `EDIT_INTERVAL_SECONDS` (10s); content-only fallback line if the embed edit fails | No (display only) |
+| Active timer embed | Same channel | `TIMER_EMBED_TITLE`, Facilitator's Intention/Facilitator/Range fields, phase label, `MM:SS remaining` + progress bar; edits every `EDIT_INTERVAL_SECONDS` (10s); content-only fallback line if the embed edit fails; finalized to a plain-text session record (embed stripped) at session end | No (display only) |
 | Wrap-up nudge | Same channel | One-time message at `WRAP_UP_MINUTES` remaining, for sessions ≥ `NUDGE_MIN_DURATION_MINUTES`; wind chime plays in voice | No (display) |
 | Session-complete embed | Same channel | "Session complete!" + @-mentions of voice members; reverie plays in voice | No (display) |
 | Reflect embed | Same channel | "[Reflect] Share how your session went!" + pre-populated ✅/⛔ | Yes — emoji react |
@@ -84,7 +84,7 @@ Do not introduce new emoji without updating this section.
 | Chain prompt | Same channel | "Go again? / Take a 5-minute break?" (or the streak variant) after a session ends | Yes — buttons |
 | Break-started / break-over messages | Same channel | Break lifecycle; Go again button reappears after, disabled after `GO_AGAIN_TIMEOUT_SECONDS` | Yes — buttons |
 | Voice channel status | The voice channel itself | Live phase indicator, only while Ocha is connected | No (display) |
-| `/teamode-stats` embed | Ephemeral response | "You" + "This server" sections, 7d/30d/all-time rows, streak | No (display, ephemeral) |
+| `/stats` embed | Ephemeral response | "You" + "This server" sections, 7d/30d/all-time rows, streak | No (display, ephemeral) |
 | Refusal messages | Same channel (ephemeral where noted) | Guard/rate-limit/stale-button refusals | No (display) |
 
 ### Welcome embed copy (canonical)
@@ -127,8 +127,8 @@ session in voice or type it in the chat.
 
 `TIMER_EMBED_TITLE`: `🍵 TeaMode • {duration} min session`. Fields:
 
-- **Intention** (`TIMER_FIELD_INTENTION`) — the submitted intention, or
-  `INTENTION_LINE_UNSET` (`🍵 No intention set`) when blank.
+- **Facilitator's Intention** (`TIMER_FIELD_INTENTION`) — the submitted
+  intention, or `INTENTION_LINE_UNSET` (`🍵 No intention set`) when blank.
 - **Facilitator** (`TIMER_FIELD_FACILITATOR`) — the current
   facilitator's mention.
 - **Range** (`TIMER_FIELD_RANGE`) — `TIMER_TIME_RANGE`:
@@ -141,6 +141,24 @@ matcha sage to oolong amber), `TIMER_REMAINING` (`{mmss} remaining`),
 and `TIMER_PROGRESS` (`{bar} {percent}%` — a `PROGRESS_BAR_WIDTH`-wide
 unicode bar). If an embed edit fails, the fallback is a plain content
 line (`TIMER_CONTENT`: `⏳ {mmss} remaining`).
+
+At session end (normal completion), the timer message is finalized in
+place: the embed is stripped (`embed=None`) and the content is rewritten
+to a compact plain-text session record via
+`_build_session_record_content` —
+
+```
+🍵 Facilitator's Intention: {intention}
+{duration} min session · Facilitated by @user
+{start} to {end}
+```
+
+(`SESSION_RECORD_INTENTION_SET`/`SESSION_RECORD_INTENTION_UNSET` +
+`SESSION_RECORD_META` + `TIMER_TIME_RANGE`) — so the long-term channel
+history is a compact line, not a lingering fielded embed. This is
+deliberately scoped to normal end-of-session only: solo-grace
+cancellation still freezes the embed (recolored muted red,
+`SOLO_GRACE_ENDED` content) rather than finalizing to plain text.
 
 ### Chaining and break copy (canonical)
 
@@ -204,7 +222,7 @@ Posted as a single `channel.send(content=..., embed=...)` call.
 
 The bot does not capture the response (`followup_note` stays NULL).
 
-### `/teamode-stats` surface (canonical)
+### `/stats` surface (canonical)
 
 Ephemeral embed, `STATS_TITLE` (`🍵 TeaMode stats`), accent
 `COLORS["active"]`. Two fields:
@@ -225,12 +243,12 @@ singular `STATS_STREAK_ONE`) is appended to "You" only when the
 personal streak (consecutive local days with a qualifying session) is
 ≥ 1. `STATS_EMPTY` shown when there is nothing to report.
 
-### `/teamode-clear` surface (canonical)
+### `/clear` surface (canonical)
 
 - `CLEAR_DONE`: `🧹 Cleared {n} messages.`
 - `CLEAR_NOTHING`: `Nothing to clear.`
 - `CLEAR_NO_PERMISSION`: `You need the Manage Messages permission to
-  run /teamode-clear.` — ephemeral refusal when the invoking member
+  run /clear.` — ephemeral refusal when the invoking member
   lacks Manage Messages (the bot itself does not need it).
 - Scans the last `CLEAR_SCAN_LIMIT` (800) messages, deletes one at a
   time paced by `CLEAR_DELETE_INTERVAL_SECONDS` (1.0s). Keeps live
@@ -280,8 +298,8 @@ deliberately does not request Manage Channels).
   buttons so the user sees options in context.
 - `/handoff <member>` — one required member option
   (`HANDOFF_MEMBER_DESCRIPTION`).
-- `/teamode-stats` — no options.
-- `/teamode-clear` — no options.
+- `/stats` — no options.
+- `/clear` — no options.
 - **Scope:** guild-scoped registration via `TEAMODE_DEV_GUILD_ID`
   (`on_ready` calls `copy_global_to` + `tree.sync(guild=...)` per
   configured guild id). If unset, registration is skipped entirely
@@ -321,7 +339,7 @@ rules" and § "Emoji palette").
   `/handoff`. The new facilitator becomes the authoritative reactor.
 - Go again / break buttons: any current voice channel member may
   click, not just the facilitator — chaining is a group decision.
-- `/teamode-clear`: gated on the **invoking member's** Manage Messages
+- `/clear`: gated on the **invoking member's** Manage Messages
   permission, checked at the top of the command handler.
 
 ### Refusal behavior
@@ -394,7 +412,7 @@ them, not reconsider them.
 - **All content-embed body lines prefixed `### ` for consistent
   heading-style weight.** Applies to the welcome, Session-complete, and
   Reflect embeds. Refusal embeds are excluded — plain body text.
-- **`/teamode-stats` and `/teamode-clear` are separate commands**, not
+- **`/stats` and `/clear` are separate commands**, not
   subcommands of `/teamode` — matches the "single command, no
   subcommands" identity while letting each surface its own permission
   model and options.
@@ -416,5 +434,5 @@ smoke test, not unit-testable): non-facilitator reaction, 3-minute
 Reflect timeout, `/handoff` manual happy path, `/handoff` refusal
 branches, automatic RNG handoff, solo-grace rejoin cancel, solo-grace
 5-minute timeout, and wifi-drop reconnect. See `TODO.md` § Notes for
-the long-break-streak and `/teamode-clear`-permission checks postponed
+the long-break-streak and `/clear`-permission checks postponed
 the same way.

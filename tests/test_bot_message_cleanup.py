@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,6 +30,7 @@ from app.db import init_db
 from app.discord_bot import TeaModeBot
 from app.discord_bot.views import (
     IntentionModal,
+    _build_session_record_content,
     _ChannelCleanup,
     _EditState,
     _SetupMessages,
@@ -236,6 +238,53 @@ async def test_followup_timeout_deletes_setup_messages(
 
     assert fake_partial.delete.await_count == 2
     assert sid not in bot._setup_messages
+
+
+@pytest.mark.asyncio
+async def test_end_of_session_finalizes_timer_message_to_plain_text_record(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """Normal end-of-session strips the timer message's embed and rewrites
+    its content to the plain-text session record, so the long-term channel
+    history is a compact line rather than a lingering fielded embed."""
+    sid = _seed_with_setup_messages(bot, registry)
+    registry.set_duration(session_id=sid, duration_minutes=25)
+    registry.set_intention(session_id=sid, intention="finish the changelog")
+    registry.mark_active(session_id=sid)
+
+    fake_channel, _fake_partial = _make_fake_channel()
+    _install_fake_client(bot, fake_channel)
+
+    fake_timer_msg = AsyncMock(spec=discord.Message)
+    started_at = datetime(2026, 9, 30, 14, 0, tzinfo=timezone.utc)
+    bot._edit_states[sid] = _EditState(message=fake_timer_msg, started_at=started_at)
+
+    fake_send_channel = AsyncMock()
+    fake_reflect_msg = AsyncMock(spec=discord.Message)
+    fake_reflect_msg.id = 12345
+    fake_send_channel.send = AsyncMock(side_effect=[AsyncMock(), fake_reflect_msg])
+
+    with patch(
+        "app.discord_bot.lifecycle.voice.play_reverie_then_disconnect",
+        return_value=True,
+    ):
+        await bot._run_end_of_session(
+            session_id=sid,
+            voice_client=MagicMock(spec=discord.VoiceClient, channel=None),
+            channel=fake_send_channel,
+        )
+
+    expected_content = _build_session_record_content(
+        intention="finish the changelog",
+        duration_minutes=25,
+        facilitator_id="111",
+        started_at=started_at,
+    )
+    fake_timer_msg.edit.assert_awaited_once()
+    call_kwargs = fake_timer_msg.edit.call_args.kwargs
+    assert call_kwargs["content"] == expected_content
+    assert call_kwargs["embed"] is None
+    assert sid not in bot._edit_states
 
 
 @pytest.mark.asyncio

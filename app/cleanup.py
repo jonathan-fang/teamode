@@ -1,4 +1,4 @@
-"""Pure message classification for ``/teamode-clear``.
+"""Pure message classification for ``/clear``.
 
 No ``discord`` import — operates on plain values (``content: str``, a
 list of embed titles) so it is unit-testable in isolation and reusable by

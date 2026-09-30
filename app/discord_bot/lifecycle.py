@@ -32,6 +32,7 @@ from app.constants import (
 from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.views import (
     COLORS,
+    _build_session_record_content,
     _build_timer_view,
     _build_welcome_embed,
     _ChannelCleanup,
@@ -287,10 +288,43 @@ class LifecycleMixin:
     ) -> None:
         """Run the full end-of-session sequence after countdown reaches zero.
 
-        Order: Session-complete embed (@-mention) → reverie+disconnect
-        → Reflect embed (facilitator prompt) → pre-populate reactions
-        → 3-minute watchdog.
+        Order: finalize the timer message to a plain-text record →
+        Session-complete embed (@-mention) → reverie+disconnect → Reflect
+        embed (facilitator prompt) → pre-populate reactions → 3-minute
+        watchdog.
         """
+        # Step 0: finalize the timer message — strip its embed and rewrite
+        # the content to a compact plain-text record (intention, duration +
+        # facilitator, range), so what persists in the channel long-term
+        # isn't a lingering fielded embed. Best-effort: a failure here must
+        # not block the rest of end-of-session. edit_state/session can be
+        # missing under unusual orderings (e.g. cleaned up concurrently) —
+        # skip finalization rather than raise.
+        edit_state = self._edit_states.pop(session_id, None)
+        session_for_record = self._registry.get(session_id)
+        if edit_state is not None and session_for_record is not None:
+            assert session_for_record.duration_minutes is not None
+            record_content = _build_session_record_content(
+                intention=session_for_record.intention,
+                duration_minutes=session_for_record.duration_minutes,
+                facilitator_id=(
+                    session_for_record.handoff_facilitator_id
+                    or session_for_record.facilitator_id
+                ),
+                started_at=edit_state.started_at,
+            )
+            try:
+                await edit_state.message.edit(
+                    content=record_content,
+                    embed=None,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                logger.warning(
+                    "Failed to finalize timer message to session record for session %s",
+                    session_id,
+                )
+
         if channel is None:
             logger.warning(
                 "No channel reference for session %s end-of-session sequence",

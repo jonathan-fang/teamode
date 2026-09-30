@@ -51,7 +51,7 @@ The Spec/Plan in `.apm/` is authoritative. This is a strategic sketch.
 - Embed-with-progress-bar timer surface (v2 polish; MVP is plain text
   cycling `mm:ss`).
 - Chained sessions ("go again? / 5-min break?") — defer to v2.
-- Stats command (`/teamode-stats`) — facilitator can `sqlite3 sessions.db`
+- Stats command (`/stats`) — facilitator can `sqlite3 sessions.db`
   for now.
 - Cross-server distribution — V2 once V1 is stable.
 
