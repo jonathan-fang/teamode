@@ -30,6 +30,7 @@ from app.constants import (
     MSG_SESSION_INACTIVE,
     MSG_VOICE_CONNECT_FAILED,
     PHASE_DEEP_FOCUS,
+    TEACUP_BANNER,
     TIMER_BUTTON_LABEL,
     TIMER_CONTENT,
     TIMER_EMBED_TITLE,
@@ -40,6 +41,7 @@ from app.constants import (
     TIMER_REMAINING,
     TIMER_TIME_RANGE,
     VOICE_STATUS_TIMER,
+    WELCOME_BANNER_BLOCK,
     WELCOME_EMBED_DESCRIPTION,
     WELCOME_EMBED_TITLE,
 )
@@ -614,7 +616,8 @@ def _build_welcome_embed() -> discord.Embed:
     """
     embed = discord.Embed(
         title=WELCOME_EMBED_TITLE,
-        description=WELCOME_EMBED_DESCRIPTION,
+        description=WELCOME_BANNER_BLOCK.format(banner=TEACUP_BANNER)
+        + WELCOME_EMBED_DESCRIPTION,
         color=COLORS["active"],
     )
     return embed
