@@ -156,6 +156,7 @@ class _ModalBot(Protocol):
     _voice_clients: dict[int, discord.VoiceClient]
     _edit_states: dict[int, _EditState]
     _countdown_tasks: dict[int, asyncio.Task[None]]
+    _pending_expiry_tasks: dict[int, asyncio.Task[None]]
 
     async def _on_countdown_tick(
         self, session_id: int, seconds_remaining: int
@@ -230,6 +231,11 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             session_id=self._session_id,
             intention=intention_text,
         )
+        # The session has left PENDING — the pending-expiry watchdog no
+        # longer applies.
+        expiry_task = self._bot._pending_expiry_tasks.pop(self._session_id, None)
+        if expiry_task is not None:
+            expiry_task.cancel()
         # Acknowledge the modal interaction without cluttering the channel.
         await interaction.response.defer(ephemeral=True)
 
@@ -390,11 +396,9 @@ class ViewsMixin:
             duration_minutes=duration_minutes,
         )
 
-        # Duration is picked — the session is no longer "unstarted", so the
-        # pending-expiry watchdog armed at session start no longer applies.
-        expiry_task = self._pending_expiry_tasks.pop(session_id, None)
-        if expiry_task is not None:
-            expiry_task.cancel()
+        # The pending-expiry watchdog stays armed: the session is still
+        # PENDING until the intention modal is submitted, and a dismissed
+        # modal (with the duration buttons now disabled) must still expire.
 
         # Disable the timer-pick buttons so a second click is impossible.
         # Must be done before opening the modal (responding to the interaction

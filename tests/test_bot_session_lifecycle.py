@@ -4,7 +4,9 @@ unified stale-button refusal added to make the session lifecycle robust.
 Covers:
   - A session left pending expires: cancelled, welcome message edited with
     the disabled duration row, and the text channel accepts a new /teamode.
-  - The expiry watchdog is cancelled once a duration is picked.
+  - The expiry watchdog survives a duration pick (the session is still
+    pending) and still expires a session whose intention modal was
+    dismissed; it is cancelled once the intention is submitted.
   - Exceptions inside background tasks (post-countdown follow-up, the
     follow-up watchdog, solo grace) are logged via logger.exception and
     never propagate unobserved.
@@ -15,6 +17,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from typing import Any
@@ -121,11 +124,11 @@ async def test_pending_session_expires_and_edits_welcome(
 
 
 @pytest.mark.asyncio
-async def test_pending_expiry_task_cancelled_when_duration_picked(
+async def test_pending_expiry_task_survives_duration_pick(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
-    """Once a duration is picked, the pending-expiry watchdog is cancelled
-    and the session is not later cancelled by it."""
+    """Picking a duration leaves the session PENDING, so the pending-expiry
+    watchdog stays armed — a dismissed intention modal must still expire."""
     session = registry.create_pending_session(
         guild_id="222",
         text_channel_id="333",
@@ -135,10 +138,6 @@ async def test_pending_expiry_task_cancelled_when_duration_picked(
     sid = session.session_id
 
     # Arm a real (long) expiry task, as _start_session would.
-    real_task = bot._registry  # placeholder to keep flake quiet
-    del real_task
-    import asyncio
-
     task = asyncio.create_task(asyncio.sleep(60))
     bot._pending_expiry_tasks[sid] = task
 
@@ -148,19 +147,56 @@ async def test_pending_expiry_task_cancelled_when_duration_picked(
     inter.channel = fake_voice_channel
     inter.message = AsyncMock(spec=discord.Message)
 
-    with patch(
-        "app.discord_bot.views.discord.ui.View.from_message",
-        return_value=discord.ui.View(),
-    ):
-        await bot.on_interaction(inter)
+    try:
+        with patch(
+            "app.discord_bot.views.discord.ui.View.from_message",
+            return_value=discord.ui.View(),
+        ):
+            await bot.on_interaction(inter)
 
-    assert sid not in bot._pending_expiry_tasks
-    assert task.cancelled() or task.cancelling() > 0
+        assert bot._pending_expiry_tasks.get(sid) is task
+        assert not task.cancelled()
+        assert task.cancelling() == 0
+    finally:
+        task.cancel()
 
-    # Session is still PENDING (duration set) — not cancelled by expiry.
     session_after = registry.get(sid)
     assert session_after is not None
     assert session_after.state == SessionState.PENDING
+    assert session_after.duration_minutes == 25
+
+
+@pytest.mark.asyncio
+async def test_pending_expiry_fires_after_duration_pick_and_dismissed_modal(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """A session whose duration was picked but whose intention modal was
+    dismissed is still PENDING and is cancelled by the expiry watchdog."""
+    session = registry.create_pending_session(
+        guild_id="222",
+        text_channel_id="333",
+        voice_channel_id="333",
+        facilitator_id="111",
+    )
+    sid = session.session_id
+    registry.set_duration(session_id=sid, duration_minutes=25)
+
+    fake_partial = AsyncMock()
+    fake_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_channel.get_partial_message = MagicMock(return_value=fake_partial)
+    _install_fake_client(bot, fake_channel)
+
+    from app.discord_bot.views import _SetupMessages
+
+    bot._setup_messages[sid] = _SetupMessages(channel_id=333, welcome_message_id=999)
+
+    await bot._run_pending_expiry(session_id=sid, sleep_seconds=0)
+
+    session_after = registry.get(sid)
+    assert session_after is not None
+    assert session_after.state == SessionState.CANCELLED
+    assert fake_partial.edit.call_args.kwargs["content"] == MSG_PENDING_EXPIRED
+    assert registry.find_active_in_text_channel("333") is None
 
 
 # ---------------------------------------------------------------------------

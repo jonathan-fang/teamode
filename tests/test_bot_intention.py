@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -329,6 +330,45 @@ async def test_modal_submit_records_intention_and_posts_timer(
     # Edit state stashed.
     assert session_id in bot._edit_states
     assert bot._edit_states[session_id].message is fake_timer_msg
+
+
+@pytest.mark.asyncio
+async def test_modal_submit_cancels_pending_expiry(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """Submitting the intention moves the session out of PENDING, so the
+    pending-expiry watchdog is cancelled and dropped."""
+    session_id = _seed_session_with_duration(
+        registry, facilitator_id=111, duration_minutes=25
+    )
+    expiry_task = asyncio.create_task(asyncio.sleep(60))
+    bot._pending_expiry_tasks[session_id] = expiry_task
+
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
+    modal = IntentionModal(
+        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
+    )
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+    inter.channel = fake_voice_channel
+
+    def _close_coro(coro: object, **_kwargs: object) -> None:
+        if hasattr(coro, "close"):
+            coro.close()  # type: ignore[union-attr]
+
+    try:
+        with (
+            patch("app.discord_bot.views.voice.connect", return_value=AsyncMock()),
+            patch("app.discord_bot.tasks.asyncio.create_task", side_effect=_close_coro),
+        ):
+            await modal.on_submit(inter)
+
+        assert session_id not in bot._pending_expiry_tasks
+        assert expiry_task.cancelling() > 0 or expiry_task.cancelled()
+    finally:
+        expiry_task.cancel()
 
 
 @pytest.mark.asyncio
