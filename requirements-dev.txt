@@ -1,0 +1,2 @@
+# Dev-only — art asset generation
+Pillow==12.3.0
