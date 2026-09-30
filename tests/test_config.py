@@ -1,7 +1,10 @@
 """Tests for app.config environment-variable loader."""
 
 import importlib
+import logging
 import sys
+from datetime import timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -77,3 +80,52 @@ def test_dev_guild_ids_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _reload_config()
 
     assert cfg.TEAMODE_DEV_GUILD_IDS == [111111111111111111, 222222222222222222]  # type: ignore[attr-defined]
+
+
+def test_timezone_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A valid IANA timezone name is parsed and exposed as configured."""
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token-abcd")
+    monkeypatch.setenv("TEAMODE_TIMEZONE", "Europe/Berlin")
+
+    cfg = _reload_config()
+
+    assert cfg.TEAMODE_TIMEZONE == ZoneInfo("Europe/Berlin")  # type: ignore[attr-defined]
+
+
+def test_timezone_unset_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset TEAMODE_TIMEZONE falls back to DEFAULT_TIMEZONE."""
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token-abcd")
+    monkeypatch.delenv("TEAMODE_TIMEZONE", raising=False)
+
+    cfg = _reload_config()
+
+    assert cfg.TEAMODE_TIMEZONE == ZoneInfo("America/Los_Angeles")  # type: ignore[attr-defined]
+
+
+def test_timezone_invalid_logs_warning_and_falls_back(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An invalid IANA name logs a WARNING and falls back to the default."""
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token-abcd")
+    monkeypatch.setenv("TEAMODE_TIMEZONE", "Not/A_Real_Zone")
+
+    with caplog.at_level(logging.WARNING):
+        cfg = _reload_config()
+
+    assert cfg.TEAMODE_TIMEZONE == ZoneInfo("America/Los_Angeles")  # type: ignore[attr-defined]
+    assert "Not/A_Real_Zone" in caplog.text
+
+
+def test_timezone_default_unavailable_falls_back_to_utc(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If even the default zone is unavailable, fall back to UTC with a WARNING."""
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token-abcd")
+    monkeypatch.setenv("TEAMODE_TIMEZONE", "Not/A_Real_Zone")
+    monkeypatch.setattr("app.constants.DEFAULT_TIMEZONE", "Also/Not_Real")
+
+    with caplog.at_level(logging.WARNING):
+        cfg = _reload_config()
+
+    assert cfg.TEAMODE_TIMEZONE == timezone.utc  # type: ignore[attr-defined]
+    assert "UTC" in caplog.text
