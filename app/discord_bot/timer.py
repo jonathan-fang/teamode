@@ -1,4 +1,4 @@
-"""Countdown tick handling: edit cadence and 429 backoff."""
+"""Countdown tick handling: edit cadence, wrap-up nudge, and 429 backoff."""
 
 from __future__ import annotations
 
@@ -6,13 +6,15 @@ import logging
 
 import discord
 
+from app import timer_format, voice
 from app.constants import (
     BACKOFF_FLOOR_CAP,
     BACKOFF_FLOOR_DEFAULT,
     EDIT_INTERVAL_SECONDS,
+    WRAP_UP_MINUTES,
 )
-from app.discord_bot.views import _build_active_timer_content, _EditState
-from app.session import SessionRegistry
+from app.discord_bot.views import _build_timer_message, _EditState, _SetupMessages
+from app.session import SessionRegistry, SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -24,21 +26,21 @@ class TimerMixin:
     # can type-check the mixin's own methods in isolation.
     _edit_states: dict[int, _EditState]
     _registry: SessionRegistry
+    _setup_messages: dict[int, _SetupMessages]
+    _voice_clients: dict[int, discord.VoiceClient]
 
     async def _on_countdown_tick(self, session_id: int, seconds_remaining: int) -> None:
         """Tick callback injected into ``run_countdown``.
 
-        Fires every second.  Only attempts a Discord message edit on
-        ticks that are multiples of *EDIT_INTERVAL_SECONDS* or on the
-        final tick (``seconds_remaining == 0``).
+        Fires every second.  Checks the one-time wrap-up nudge first (it has
+        its own trigger point, independent of the edit cadence), then only
+        attempts a Discord message edit on ticks that are multiples of
+        *EDIT_INTERVAL_SECONDS* or on the final tick (``seconds_remaining ==
+        0``).
 
         Skips the edit if the per-session lock is already held (a previous
         edit is still in flight).  Applies exponential backoff on HTTP 429.
         """
-        # Only edit on 10-second boundaries and at zero.
-        if seconds_remaining % EDIT_INTERVAL_SECONDS != 0 and seconds_remaining != 0:
-            return
-
         edit_state = self._edit_states.get(session_id)
         if edit_state is None:
             # Session was cleaned up; nothing to do.
@@ -47,6 +49,51 @@ class TimerMixin:
         # Check the session for the message content.
         session = self._registry.get(session_id)
         if session is None:
+            return
+
+        # Wrap-up nudge: fires once, exactly at the trigger point, for
+        # sessions long enough to warrant it. Checked before the edit-cadence
+        # early return below since the trigger (WRAP_UP_MINUTES * 60) need
+        # not fall on an EDIT_INTERVAL_SECONDS boundary in general (it does
+        # today, but this keeps the two concerns independent).
+        if (
+            not edit_state.nudge_sent
+            and session.duration_minutes is not None
+            and timer_format.should_nudge(session.duration_minutes, seconds_remaining)
+        ):
+            # Re-check liveness at fire time — never nudge a session that
+            # has since left ACTIVE (e.g. cancelled via solo grace).
+            live_session = self._registry.get(session_id)
+            if live_session is not None and live_session.state == SessionState.ACTIVE:
+                edit_state.nudge_sent = True
+                channel = getattr(edit_state.message, "channel", None)
+                if channel is not None:
+                    try:
+                        nudge_message = await channel.send(
+                            timer_format.format_wrap_up_nudge(WRAP_UP_MINUTES)
+                        )
+                    except discord.HTTPException:
+                        logger.warning(
+                            "Failed to send wrap-up nudge for session %s", session_id
+                        )
+                    else:
+                        setup = self._setup_messages.get(session_id)
+                        if setup is not None:
+                            setup.nudge_message_id = nudge_message.id
+
+                # The chime fires only when the nudge fires (above), whether
+                # or not the nudge message send itself succeeded.
+                voice_client = self._voice_clients.get(session_id)
+                if voice_client is None:
+                    logger.warning(
+                        "No voice client for session %s — skipping wind chime",
+                        session_id,
+                    )
+                else:
+                    voice.play_wind_chime(voice_client)
+
+        # Only edit on 10-second boundaries and at zero.
+        if seconds_remaining % EDIT_INTERVAL_SECONDS != 0 and seconds_remaining != 0:
             return
 
         # 429 backoff gate: skip edits until backoff_floor seconds have
@@ -78,9 +125,14 @@ class TimerMixin:
             return
 
         async with edit_state.lock:
-            content = _build_active_timer_content(
+            # duration_minutes is always set by this point — the session
+            # reached ACTIVE via mark_active, which requires it.
+            assert session.duration_minutes is not None
+            content, embed = _build_timer_message(
                 intention=session.intention,
                 duration_minutes=session.duration_minutes,
+                facilitator_id=session.handoff_facilitator_id or session.facilitator_id,
+                started_at=edit_state.started_at,
                 seconds_remaining=seconds_remaining,
                 mention_line=edit_state.mention_line,
             )
@@ -91,6 +143,7 @@ class TimerMixin:
                 # so it remains visible for the rest of the session.
                 await edit_state.message.edit(
                     content=content,
+                    embed=embed,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 # Successful edit — decay backoff floor back to default and

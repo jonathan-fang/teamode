@@ -12,13 +12,14 @@ import discord
 import pytest
 
 from app.constants import (
-    ACTIVE_TIMER_FMT,
     MSG_NOT_FACILITATOR,
     MSG_SESSION_INACTIVE,
     MSG_VOICE_CONNECT_FAILED,
+    TIMER_CONTENT,
+    TIMER_EMBED_TITLE,
 )
 from app.discord_bot import TeaModeBot
-from app.discord_bot.views import IntentionModal, _format_intention_line, _SetupMessages
+from app.discord_bot.views import IntentionModal, _SetupMessages
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
 
@@ -310,13 +311,12 @@ async def test_modal_submit_records_intention_and_posts_timer(
     # Timer message sent via channel.send (not followup — avoids 15-min token expiry).
     assert inter.channel.send.call_count == 1
     timer_call = inter.channel.send.call_args_list[0]
-    expected_initial = ACTIVE_TIMER_FMT.format(
-        intention_line=_format_intention_line("finish the changelog"),
-        duration=25,
-        mm=25,
-        ss=0,
-    )
-    assert timer_call.args == (expected_initial,)
+    expected_initial_content = TIMER_CONTENT.format(mmss="25:00")
+    assert timer_call.kwargs["content"] == expected_initial_content
+    sent_embed: discord.Embed = timer_call.kwargs["embed"]
+    assert sent_embed.title == TIMER_EMBED_TITLE.format(duration=25)
+    field_values = {f.name: f.value for f in sent_embed.fields}
+    assert field_values["Intention"] == "finish the changelog"
 
     # voice.connect called with the channel passed at modal-construction time
     # (no REST fetch_channel call occurs).

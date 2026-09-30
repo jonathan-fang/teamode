@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Protocol
 
 import discord
 
 from app import session as session_module
+from app import timer_format
 from app import voice
+from app.config import TEAMODE_TIMEZONE
 from app.constants import (
-    ACTIVE_TIMER_FMT,
     BACKOFF_FLOOR_DEFAULT,
     COLOR_MATCHA_SAGE,
     COLOR_MUTED_GREY,
@@ -21,14 +23,22 @@ from app.constants import (
     COLOR_STEEPING_FOREST,
     DURATIONS_MINUTES,
     INTENTION_FIELD_LABEL,
-    INTENTION_LINE_SET,
     INTENTION_LINE_UNSET,
     INTENTION_MAX_LENGTH,
     INTENTION_MODAL_TITLE,
     MSG_NOT_FACILITATOR,
     MSG_SESSION_INACTIVE,
     MSG_VOICE_CONNECT_FAILED,
+    PHASE_DEEP_FOCUS,
     TIMER_BUTTON_LABEL,
+    TIMER_CONTENT,
+    TIMER_EMBED_TITLE,
+    TIMER_FIELD_FACILITATOR,
+    TIMER_FIELD_INTENTION,
+    TIMER_FIELD_RANGE,
+    TIMER_FIELD_VALUE_MAX_LENGTH,
+    TIMER_REMAINING,
+    TIMER_TIME_RANGE,
     WELCOME_EMBED_DESCRIPTION,
     WELCOME_EMBED_TITLE,
 )
@@ -43,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 COLORS = {
     "active": discord.Color.from_str(COLOR_MATCHA_SAGE),
+    "wrap_up": discord.Color.from_str(COLOR_OOLONG_AMBER),
     "end_of_session": discord.Color.from_str(COLOR_STEEPING_FOREST),
     "refusal": discord.Color.from_str(COLOR_MUTED_GREY),
     "crashed": discord.Color.from_str(COLOR_MUTED_RED),
@@ -50,48 +61,83 @@ COLORS = {
 }
 
 
-def _format_timer(seconds_remaining: int) -> str:
-    """Format *seconds_remaining* as ``mm:ss`` (zero-padded)."""
-    mm, ss = divmod(seconds_remaining, 60)
-    return f"{mm:02d}:{ss:02d}"
+def _now() -> datetime:
+    """Return the current UTC time — the single seam patched in tests that
+    need a fixed ``started_at``."""
+    return datetime.now(timezone.utc)
 
 
-def _format_intention_line(intention: str | None) -> str:
-    """Render the first line of the active timer message.
+def _truncate_field_value(value: str) -> str:
+    """Truncate *value* to fit an embed field's 1024-char limit.
 
-    Returns the placeholder when no intention was captured.
+    Cuts to ``TIMER_FIELD_VALUE_MAX_LENGTH - 1`` characters plus an
+    ellipsis when over the limit — the intention field can hold up to
+    ``INTENTION_MAX_LENGTH`` (4000) characters, well past the embed limit.
     """
-    if intention and intention.strip():
-        return INTENTION_LINE_SET.format(intention=intention)
-    return INTENTION_LINE_UNSET
+    if len(value) <= TIMER_FIELD_VALUE_MAX_LENGTH:
+        return value
+    return value[: TIMER_FIELD_VALUE_MAX_LENGTH - 1] + "…"
 
 
-def _build_active_timer_content(
+def _build_timer_message(
     *,
     intention: str | None,
-    duration_minutes: int | None,
+    duration_minutes: int,
+    facilitator_id: str,
+    started_at: datetime,
     seconds_remaining: int,
     mention_line: str,
-) -> str:
-    """Build the active-timer message content — the ONE place both the
-    initial send and every tick edit build this string, so they can never
-    drift apart.
+) -> tuple[str, discord.Embed]:
+    """Build the active-timer message content and embed together — the ONE
+    place both the initial send and every tick edit build these, so they can
+    never drift apart.
 
     ``mention_line`` is the pre-snapshotted @-mention line for the
     session's non-bot voice members (built once, when the timer message is
-    first sent) — empty when there are none, in which case no extra line
-    is added.
+    first sent) — empty when there are none, in which case no extra content
+    line is added. ``facilitator_id`` is the *current* facilitator (a
+    handoff is reflected on the next tick edit, since the caller re-reads
+    the session each time).
     """
-    mm, ss = divmod(seconds_remaining, 60)
-    base = ACTIVE_TIMER_FMT.format(
-        intention_line=_format_intention_line(intention),
-        duration=duration_minutes,
-        mm=mm,
-        ss=ss,
+    total_seconds = duration_minutes * 60
+    elapsed_seconds = total_seconds - seconds_remaining
+    mmss = timer_format.format_mmss(seconds_remaining)
+    phase = timer_format.select_phase(seconds_remaining)
+    progress_line = timer_format.format_progress_bar(elapsed_seconds, total_seconds)
+
+    intention_value = intention.strip() if intention and intention.strip() else None
+    intention_field_value = _truncate_field_value(
+        intention_value if intention_value is not None else INTENTION_LINE_UNSET
     )
+
+    embed = discord.Embed(
+        title=TIMER_EMBED_TITLE.format(duration=duration_minutes),
+        description=(
+            f"### {phase}\n### {TIMER_REMAINING.format(mmss=mmss)}\n### {progress_line}"
+        ),
+        color=COLORS["active"] if phase == PHASE_DEEP_FOCUS else COLORS["wrap_up"],
+    )
+    embed.add_field(
+        name=TIMER_FIELD_INTENTION, value=intention_field_value, inline=False
+    )
+    embed.add_field(
+        name=TIMER_FIELD_FACILITATOR, value=f"<@{facilitator_id}>", inline=False
+    )
+    embed.add_field(
+        name=TIMER_FIELD_RANGE,
+        value=TIMER_TIME_RANGE.format(
+            start=timer_format.format_hhmm(started_at, TEAMODE_TIMEZONE),
+            end=timer_format.format_hhmm(
+                started_at + timedelta(minutes=duration_minutes), TEAMODE_TIMEZONE
+            ),
+        ),
+        inline=False,
+    )
+
+    content = TIMER_CONTENT.format(mmss=mmss)
     if mention_line:
-        return f"{base}\n{mention_line}"
-    return base
+        content = f"{content}\n{mention_line}"
+    return content, embed
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +163,14 @@ class _EditState:
     # Snapshot of the @-mention line for non-bot voice members, built once
     # when the timer message is first sent, so tick edits reuse it verbatim.
     mention_line: str = ""
+    # Timezone-aware activation time, captured once when the timer message
+    # is first sent, so every edit's "Range" field reads the same
+    # value. Defaults to "now" only for callers (tests) that don't care.
+    started_at: datetime = field(default_factory=_now)
+    # Set once the wrap-up nudge has fired for this session, so a second
+    # tick landing on the trigger boundary (e.g. after a backoff skip) never
+    # double-sends it.
+    nudge_sent: bool = False
 
 
 @dataclass
@@ -132,6 +186,11 @@ class _SetupMessages:
     channel_id: int
     welcome_message_id: int
     intention_message_id: int | None = None
+    # Set once the wrap-up nudge message has been sent (see TimerMixin),
+    # so terminal cleanup deletes it alongside the welcome and Set
+    # Intention messages. None when no nudge has fired (e.g. short
+    # sessions, or terminal cleanup before the trigger point).
+    nudge_message_id: int | None = None
 
 
 @dataclass
@@ -317,19 +376,28 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         ]
         mention_line = " ".join(m.mention for m in mention_members)
 
-        initial_content = _build_active_timer_content(
+        # Captured once, here, and reused by every tick edit so "Range"
+        # never drifts across the session.
+        started_at = _now()
+        initial_content, initial_embed = _build_timer_message(
             intention=session.intention,
             duration_minutes=session.duration_minutes,
+            facilitator_id=session.handoff_facilitator_id or session.facilitator_id,
+            started_at=started_at,
             seconds_remaining=session.duration_minutes * 60,
             mention_line=mention_line,
         )
         # Send on the voice channel resolved at click-handler time — the same
         # typed reference used to connect above, so no cast is needed here.
-        timer_message = await voice_channel.send(initial_content)
+        timer_message = await voice_channel.send(
+            content=initial_content, embed=initial_embed
+        )
 
         # Stash edit state so the tick callback can reach it.
         self._bot._edit_states[self._session_id] = _EditState(
-            message=timer_message, mention_line=mention_line
+            message=timer_message,
+            mention_line=mention_line,
+            started_at=started_at,
         )
 
         # --- Schedule countdown, then run the full end-of-session sequence ---

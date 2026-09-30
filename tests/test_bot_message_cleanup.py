@@ -81,6 +81,7 @@ def _seed_with_setup_messages(
     channel_id: int = 333,
     welcome_id: int = 100,
     intention_id: int = 200,
+    nudge_id: int | None = None,
 ) -> int:
     session = registry.create_pending_session(
         guild_id="222",
@@ -93,6 +94,7 @@ def _seed_with_setup_messages(
         channel_id=channel_id,
         welcome_message_id=welcome_id,
         intention_message_id=intention_id,
+        nudge_message_id=nudge_id,
     )
     return sid
 
@@ -141,6 +143,37 @@ async def test_completed_checkmark_deletes_setup_messages(
         ((200,),),
     ]
     assert fake_partial.delete.await_count == 2
+    assert sid not in bot._setup_messages
+
+
+@pytest.mark.asyncio
+async def test_completed_checkmark_deletes_nudge_message_when_it_fired(
+    bot: TeaModeBot, registry: SessionRegistry
+) -> None:
+    """When a wrap-up nudge fired earlier in the session, terminal cleanup
+    also deletes it, via the channel, alongside the welcome and
+    Set-Intention messages."""
+    sid = _seed_with_setup_messages(bot, registry, nudge_id=300)
+    registry.set_duration(session_id=sid, duration_minutes=1)
+    registry.set_intention(session_id=sid, intention="x")
+    registry.mark_active(session_id=sid)
+    registry.mark_followup(session_id=sid)
+
+    bot._reflect_message_ids[sid] = 999
+    fake_channel, fake_partial = _make_fake_channel()
+    _install_fake_client(bot, fake_channel)
+
+    payload = FakeRawReactionActionEvent(
+        user_id=111, message_id=999, emoji=_make_emoji("✅")
+    )
+    await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
+
+    assert fake_channel.get_partial_message.call_args_list == [
+        ((100,),),
+        ((200,),),
+        ((300,),),
+    ]
+    assert fake_partial.delete.await_count == 3
     assert sid not in bot._setup_messages
 
 
@@ -311,6 +344,48 @@ async def test_delete_failure_logged_as_warning(
     session = registry.get(sid)
     assert session is not None
     assert session.state == SessionState.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_nudge_delete_failure_logged_as_warning_and_flow_continues(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failure deleting the nudge message specifically (welcome/intention
+    delete fine) is logged at WARNING and the rest of cleanup completes."""
+    sid = _seed_with_setup_messages(bot, registry, nudge_id=300)
+    registry.set_duration(session_id=sid, duration_minutes=25)
+    registry.set_intention(session_id=sid, intention="x")
+    registry.mark_active(session_id=sid)
+
+    partials: dict[int, AsyncMock] = {}
+
+    def _get_partial(message_id: int) -> AsyncMock:
+        partial = partials.setdefault(message_id, AsyncMock())
+        if message_id == 300:
+            partial.delete = AsyncMock(
+                side_effect=discord.NotFound(MagicMock(), "gone")
+            )
+        return partial
+
+    fake_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_channel.get_partial_message = MagicMock(side_effect=_get_partial)
+    _install_fake_client(bot, fake_channel)
+    bot._edit_states[sid] = _EditState(message=AsyncMock(spec=discord.Message))
+
+    with caplog.at_level(logging.WARNING, logger="app.discord_bot.lifecycle"):
+        await bot._run_solo_grace(session_id=sid, sleep_seconds=0)
+
+    assert any(
+        "Failed to delete setup message 300" in r.message for r in caplog.records
+    )
+    assert partials[100].delete.await_count == 1
+    assert partials[200].delete.await_count == 1
+    session = registry.get(sid)
+    assert session is not None
+    assert session.state == SessionState.CANCELLED
+    assert sid not in bot._setup_messages
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +598,7 @@ async def test_initial_timer_send_includes_non_bot_mentions(
         await modal.on_submit(inter)
 
     fake_voice_channel.send.assert_called_once()
-    sent_content: str = fake_voice_channel.send.call_args.args[0]
+    sent_content: str = fake_voice_channel.send.call_args.kwargs["content"]
     assert "<@501>" in sent_content
     assert "<@1>" not in sent_content
 

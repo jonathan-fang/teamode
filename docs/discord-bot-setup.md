@@ -144,7 +144,7 @@ holds end-to-end.
 
 1. Start Ocha: `cd ~/WSL/github.com/jonathan-fang/teamode && source .venv/bin/activate && python3 teamode.py`
 2. Run `/teamode` in a voice channel's text chat. Pick the **10 min** duration. Submit an intention (any text).
-3. Wait until the active timer message shows roughly `⏳ 07:00` (≈3 minutes elapsed).
+3. Wait until the active timer message shows roughly `⏳ 07:00 remaining` (≈3 minutes elapsed).
 4. Disable wifi for **30 seconds** (e.g. `sudo ip link set wlan0 down; sleep 30; sudo ip link set wlan0 up`).
 5. Observe:
    - During the outage, the timer message stops updating. This is expected.

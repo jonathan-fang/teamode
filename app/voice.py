@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 # Resolved once at import so the same Path object is reused per playback call.
 REVERIE_PATH: Path = (Path(__file__).parent / ".." / "assets" / "reverie.wav").resolve()
+WIND_CHIME_PATH: Path = (
+    Path(__file__).parent / ".." / "assets" / "wind-chime.wav"
+).resolve()
 
 
 async def connect(voice_channel: discord.VoiceChannel) -> discord.VoiceClient:
@@ -46,6 +49,32 @@ def play_reverie(voice_client: discord.VoiceClient) -> None:
     (Stage 4).  Propagates any exception raised by discord.py.
     """
     voice_client.play(discord.FFmpegPCMAudio(str(REVERIE_PATH)))
+
+
+def play_wind_chime(voice_client: discord.VoiceClient) -> bool:
+    """Play the wind chime once on *voice_client* without disconnecting.
+
+    Returns ``True`` if playback was started, ``False`` if it was skipped
+    or failed. The call returns immediately — it does not wait for
+    playback to finish. Refuses (with a WARNING) rather than raising when
+    the client is not connected or already playing something (the
+    wrap-up nudge fires alongside the timer edit, so it must never crash
+    or disrupt the running session), and when ``play()`` itself raises
+    (e.g. ffmpeg missing from PATH, surfaced by discord.py as
+    ``discord.ClientException``, or another OS-level failure).
+    """
+    if not voice_client.is_connected():
+        logger.warning("Skipping wind chime — voice client is not connected")
+        return False
+    if voice_client.is_playing():
+        logger.warning("Skipping wind chime — voice client is already playing")
+        return False
+    try:
+        voice_client.play(discord.FFmpegPCMAudio(str(WIND_CHIME_PATH)))
+    except (discord.ClientException, OSError) as exc:
+        logger.warning("Failed to play wind chime: %s", exc)
+        return False
+    return True
 
 
 async def disconnect(voice_client: discord.VoiceClient) -> None:
