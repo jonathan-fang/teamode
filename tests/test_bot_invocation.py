@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from app.bot import (
-    TeaModeBot,
+from app.discord_bot import TeaModeBot
+from app.discord_bot.commands import (
     _MSG_NOT_IN_VOICE,
     _MSG_PARTICIPANT_PROMPT,
     _MSG_SESSION_ACTIVE,
@@ -249,7 +249,7 @@ async def test_guard_pass_creates_session_and_posts_welcome(
         user_voice_channel_id=333,
     )
 
-    with patch("app.bot.asyncio.sleep", new=AsyncMock()):
+    with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot._handle_teamode(inter)
 
     # send_message called once, not ephemeral, with an embed and a view.
@@ -291,7 +291,7 @@ async def test_guard_pass_timer_button_custom_ids(
     """Timer-pick buttons have custom_ids for 5/10/25/50 min and correct labels."""
     inter = _make_voice_interaction(channel_id=333, guild_id=222, user_id=111)
 
-    with patch("app.bot.asyncio.sleep", new=AsyncMock()):
+    with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot._handle_teamode(inter)
 
     call_kwargs = inter.response.send_message.call_args.kwargs
@@ -349,7 +349,7 @@ async def test_participant_prompt_mentions_non_bot_members(
         voice_channel_members=[member_a, member_b, bot_member],
     )
 
-    with patch("app.bot.asyncio.sleep", new=AsyncMock()):
+    with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot._handle_teamode(inter)
 
     inter.followup.send.assert_called_once()
@@ -375,7 +375,7 @@ async def test_participant_prompt_fallback_when_no_members(
         voice_channel_members=[],
     )
 
-    with patch("app.bot.asyncio.sleep", new=AsyncMock()):
+    with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot._handle_teamode(inter)
 
     inter.followup.send.assert_called_once()

@@ -1,3 +1,38 @@
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+exclude = [
+    ".venv",
+    "**/__pycache__",
+    ".apm",
+    ".claude",
+    ".ruff_cache",
+]
+# Unused-symbol reporting is left to Ruff (F401/F841/etc.) so warnings
+# aren't duplicated between the two tools. Real type checking is left
+# at pyright's defaults.
+reportUnusedImport = false
+reportUnusedVariable = false
+reportUnusedClass = false
+reportUnusedFunction = false
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Default rule set today (equivalent to ["E4", "E7", "E9", "F"]) — kept
+# explicit so future additions are visible in diffs.
+select = ["E4", "E7", "E9", "F"]
+
+# Staged for after the type-hint retrofit on app/ and teamode.py: turning
+# this on now would surface missing-annotation errors on existing code.
+# Once app/ is fully annotated, enable with:
+#   extend-select = ["ANN"]
+# and keep the tests/ exemption below.
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN"]

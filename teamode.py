@@ -4,7 +4,7 @@ import logging
 import sys
 
 import app.db as db
-from app.bot import TeaModeBot
+from app.discord_bot import TeaModeBot
 from app.config import DISCORD_BOT_TOKEN, TEAMODE_DB_PATH
 from app.session import SessionRegistry
 

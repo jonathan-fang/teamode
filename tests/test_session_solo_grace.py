@@ -18,7 +18,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from app.bot import TeaModeBot, _EditState
+from app.discord_bot import TeaModeBot
+from app.discord_bot.views import _EditState
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
 
@@ -151,7 +152,9 @@ async def test_solo_grace_timeout_cancels_session(
     bot._voice_clients[sid] = fake_vc  # type: ignore[assignment]
     bot._edit_states[sid] = edit_state
 
-    with patch("app.bot.voice.disconnect", new_callable=AsyncMock) as mock_disconnect:
+    with patch(
+        "app.discord_bot.lifecycle.voice.disconnect", new_callable=AsyncMock
+    ) as mock_disconnect:
         await bot._run_solo_grace(session_id=sid, sleep_seconds=0)
 
     # Countdown task was cancelled.
@@ -192,7 +195,9 @@ async def test_solo_grace_handles_missing_state_gracefully(
     sid = _seed_active_session(registry)
 
     # No pre-populated state in any of the dicts.
-    with patch("app.bot.voice.disconnect", new_callable=AsyncMock) as mock_disconnect:
+    with patch(
+        "app.discord_bot.lifecycle.voice.disconnect", new_callable=AsyncMock
+    ) as mock_disconnect:
         await bot._run_solo_grace(session_id=sid, sleep_seconds=0)
 
     # voice.disconnect was NOT called (no voice client).
@@ -222,7 +227,9 @@ async def test_solo_grace_edit_failure_does_not_block_cancellation(
     bot._voice_clients[sid] = fake_vc  # type: ignore[assignment]
     bot._edit_states[sid] = edit_state
 
-    with patch("app.bot.voice.disconnect", new_callable=AsyncMock) as mock_disconnect:
+    with patch(
+        "app.discord_bot.lifecycle.voice.disconnect", new_callable=AsyncMock
+    ) as mock_disconnect:
         # Should not raise despite the edit failure.
         await bot._run_solo_grace(session_id=sid, sleep_seconds=0)
 
@@ -280,7 +287,9 @@ async def test_solo_leave_arms_watchdog(
 
     _install_fake_client_user(bot, user_id=999)
 
-    with patch("app.bot.asyncio.create_task", wraps=asyncio.create_task) as mock_create:
+    with patch(
+        "app.discord_bot.lifecycle.asyncio.create_task", wraps=asyncio.create_task
+    ) as mock_create:
         await bot.on_voice_state_update(facilitator, before, after)
 
     # Watchdog was armed.

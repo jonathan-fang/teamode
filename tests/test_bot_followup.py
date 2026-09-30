@@ -21,12 +21,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from app.bot import (
-    COLORS,
-    TeaModeBot,
-    _END_EMBED_BODY,
-    _END_EMBED_TITLE,
-)
+from app.discord_bot import TeaModeBot
+from app.discord_bot.lifecycle import _END_EMBED_BODY, _END_EMBED_TITLE
+from app.discord_bot.views import COLORS
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
 
@@ -171,10 +168,12 @@ async def test_end_of_session_sequence_happy_path(
         return t
 
     with patch(
-        "app.bot.voice.play_reverie_then_disconnect", return_value=True
+        "app.discord_bot.lifecycle.voice.play_reverie_then_disconnect",
+        return_value=True,
     ) as mock_play:
         with patch(
-            "app.bot.asyncio.create_task", side_effect=_capture_and_discard
+            "app.discord_bot.lifecycle.asyncio.create_task",
+            side_effect=_capture_and_discard,
         ) as mock_create_task:
             await bot._run_end_of_session(
                 session_id=sid,
@@ -256,8 +255,11 @@ async def test_end_of_session_empty_voice_channel(
         captured_coros.append(coro)
         return MagicMock()
 
-    with patch("app.bot.voice.play_reverie_then_disconnect", return_value=True):
-        with patch("app.bot.asyncio.create_task", side_effect=_cap):
+    with patch(
+        "app.discord_bot.lifecycle.voice.play_reverie_then_disconnect",
+        return_value=True,
+    ):
+        with patch("app.discord_bot.lifecycle.asyncio.create_task", side_effect=_cap):
             await bot._run_end_of_session(
                 session_id=sid,
                 voice_client=fake_vc,
@@ -299,9 +301,14 @@ async def test_end_of_session_reverie_failure_logs_warning(
         captured_coros.append(coro)
         return MagicMock()
 
-    with caplog.at_level(logging.WARNING, logger="app.bot"):
-        with patch("app.bot.voice.play_reverie_then_disconnect", return_value=False):
-            with patch("app.bot.asyncio.create_task", side_effect=_cap):
+    with caplog.at_level(logging.WARNING, logger="app.discord_bot.lifecycle"):
+        with patch(
+            "app.discord_bot.lifecycle.voice.play_reverie_then_disconnect",
+            return_value=False,
+        ):
+            with patch(
+                "app.discord_bot.lifecycle.asyncio.create_task", side_effect=_cap
+            ):
                 await bot._run_end_of_session(
                     session_id=sid,
                     voice_client=fake_vc,
@@ -445,7 +452,7 @@ async def test_non_facilitator_reaction_logged_only(
         emoji=_make_emoji("✅"),
     )
 
-    with caplog.at_level(logging.INFO, logger="app.bot"):
+    with caplog.at_level(logging.INFO, logger="app.discord_bot.lifecycle"):
         await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
 
     # No state transition.
@@ -592,8 +599,13 @@ async def test_watchdog_fires_marks_followup_timeout(
         t.cancel = MagicMock()
         return t
 
-    with patch("app.bot.voice.play_reverie_then_disconnect", return_value=True):
-        with patch("app.bot.asyncio.create_task", side_effect=_capture_task):
+    with patch(
+        "app.discord_bot.lifecycle.voice.play_reverie_then_disconnect",
+        return_value=True,
+    ):
+        with patch(
+            "app.discord_bot.lifecycle.asyncio.create_task", side_effect=_capture_task
+        ):
             await bot._run_end_of_session(
                 session_id=sid,
                 voice_client=fake_vc,
@@ -603,7 +615,7 @@ async def test_watchdog_fires_marks_followup_timeout(
     assert len(captured_coro) == 1
 
     # Run the watchdog coroutine with sleep patched to return immediately.
-    with patch("app.bot.asyncio.sleep", return_value=None):
+    with patch("app.discord_bot.lifecycle.asyncio.sleep", return_value=None):
         await captured_coro[0]
 
     session = registry.get(sid)
@@ -672,7 +684,9 @@ async def test_timer_pick_disables_buttons(
 
     inter.response = AsyncMock()
 
-    with patch("app.bot.discord.ui.View.from_message", return_value=fake_view):
+    with patch(
+        "app.discord_bot.views.discord.ui.View.from_message", return_value=fake_view
+    ):
         await bot.on_interaction(inter)
 
     # All buttons are now disabled.

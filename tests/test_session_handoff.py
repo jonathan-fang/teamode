@@ -17,7 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from app.bot import COLORS, TeaModeBot
+from app.discord_bot import TeaModeBot
+from app.discord_bot.views import COLORS
 from app.db import init_db
 from app.session import SessionRegistry
 
@@ -145,7 +146,7 @@ async def test_facilitator_leaves_with_others_triggers_rng_handoff(
     fake_text_channel = AsyncMock()
     fake_client.get_channel = MagicMock(return_value=fake_text_channel)
 
-    with patch("app.bot.random.choice", return_value=other_member):
+    with patch("app.discord_bot.lifecycle.random.choice", return_value=other_member):
         await bot.on_voice_state_update(facilitator, before, after)
 
     # Registry updated — new facilitator.
@@ -182,7 +183,7 @@ async def test_facilitator_leaves_alone_no_handoff(
     fake_text_channel = AsyncMock()
     fake_client.get_channel = MagicMock(return_value=fake_text_channel)
 
-    with patch("app.bot.random.choice") as mock_choice:
+    with patch("app.discord_bot.lifecycle.random.choice") as mock_choice:
         await bot.on_voice_state_update(facilitator, before, after)
 
     # mark_handoff was NOT called — facilitator_id unchanged.
@@ -216,7 +217,7 @@ async def test_non_facilitator_leaves_no_handoff(
     fake_text_channel = AsyncMock()
     fake_client.get_channel = MagicMock(return_value=fake_text_channel)
 
-    with patch("app.bot.random.choice") as mock_choice:
+    with patch("app.discord_bot.lifecycle.random.choice") as mock_choice:
         await bot.on_voice_state_update(non_facilitator, before, after)
 
     # Session unchanged.
@@ -251,7 +252,7 @@ async def test_member_switches_channels_treated_as_leave_for_source_channel(
     fake_text_channel = AsyncMock()
     fake_client.get_channel = MagicMock(return_value=fake_text_channel)
 
-    with patch("app.bot.random.choice", return_value=other_member):
+    with patch("app.discord_bot.lifecycle.random.choice", return_value=other_member):
         await bot.on_voice_state_update(facilitator, before, after)
 
     session = registry.get(sid)
