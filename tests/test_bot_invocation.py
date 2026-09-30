@@ -9,13 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from app.discord_bot import TeaModeBot
-from app.discord_bot.commands import (
-    _MSG_NOT_IN_VOICE,
-    _MSG_PARTICIPANT_PROMPT,
-    _MSG_SESSION_ACTIVE,
-    _MSG_WRONG_CHANNEL,
+from app.constants import (
+    MSG_NOT_IN_VOICE,
+    MSG_PARTICIPANT_PROMPT,
+    MSG_SESSION_ACTIVE,
+    MSG_WRONG_CHANNEL,
 )
+from app.discord_bot import TeaModeBot
 from app.db import init_db
 from app.session import SessionRegistry
 
@@ -150,7 +150,7 @@ async def test_guard_wrong_channel_sends_ephemeral_refusal(
     call_kwargs = inter.response.send_message.call_args.kwargs
     assert call_kwargs.get("ephemeral") is True
     embed: discord.Embed = call_kwargs["embed"]
-    assert embed.description == _MSG_WRONG_CHANNEL
+    assert embed.description == MSG_WRONG_CHANNEL
     assert _row_count(conn) == 0
 
 
@@ -173,7 +173,7 @@ async def test_guard_not_in_voice_sends_ephemeral_refusal(
     call_kwargs = inter.response.send_message.call_args.kwargs
     assert call_kwargs.get("ephemeral") is True
     embed: discord.Embed = call_kwargs["embed"]
-    assert embed.description == _MSG_NOT_IN_VOICE
+    assert embed.description == MSG_NOT_IN_VOICE
     assert _row_count(conn) == 0
 
 
@@ -192,7 +192,7 @@ async def test_guard_in_different_voice_channel_sends_ephemeral_refusal(
     call_kwargs = inter.response.send_message.call_args.kwargs
     assert call_kwargs.get("ephemeral") is True
     embed: discord.Embed = call_kwargs["embed"]
-    assert embed.description == _MSG_NOT_IN_VOICE
+    assert embed.description == MSG_NOT_IN_VOICE
     assert _row_count(conn) == 0
 
 
@@ -224,7 +224,7 @@ async def test_guard_session_already_active_sends_ephemeral_refusal(
     call_kwargs = inter.response.send_message.call_args.kwargs
     assert call_kwargs.get("ephemeral") is True
     embed: discord.Embed = call_kwargs["embed"]
-    assert embed.description == _MSG_SESSION_ACTIVE
+    assert embed.description == MSG_SESSION_ACTIVE
     # Only the seeded row, no new row inserted.
     assert _row_count(conn) == 1
 
@@ -380,4 +380,4 @@ async def test_participant_prompt_fallback_when_no_members(
 
     inter.followup.send.assert_called_once()
     prompt_text: str = inter.followup.send.call_args.args[0]
-    assert prompt_text == _MSG_PARTICIPANT_PROMPT
+    assert prompt_text == MSG_PARTICIPANT_PROMPT.format(mentions="")

@@ -14,9 +14,9 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
+from app.constants import BACKOFF_FLOOR_CAP, BACKOFF_FLOOR_DEFAULT
 from app.discord_bot import TeaModeBot
-from app.discord_bot.timer import _BACKOFF_FLOOR_CAP
-from app.discord_bot.views import _BACKOFF_FLOOR_DEFAULT, _EditState
+from app.discord_bot.views import _EditState
 from app.db import init_db
 from app.session import SessionRegistry
 
@@ -117,7 +117,7 @@ async def test_429_doubles_backoff_floor(
     session_id, fake_msg = _seed_active_session(registry, bot)
     edit_state = bot._edit_states[session_id]
 
-    assert edit_state.backoff_floor == _BACKOFF_FLOOR_DEFAULT
+    assert edit_state.backoff_floor == BACKOFF_FLOOR_DEFAULT
 
     # Simulate a 429 HTTPException from message.edit.
     rate_limit_exc = discord.HTTPException(MagicMock(status=429), "rate limited")
@@ -127,7 +127,7 @@ async def test_429_doubles_backoff_floor(
     await bot._on_countdown_tick(session_id, seconds_remaining=30)
 
     # Backoff floor must have doubled.
-    assert edit_state.backoff_floor == _BACKOFF_FLOOR_DEFAULT * 2
+    assert edit_state.backoff_floor == BACKOFF_FLOOR_DEFAULT * 2
 
 
 @pytest.mark.asyncio
@@ -143,19 +143,19 @@ async def test_429_backoff_decays_on_success(
     rate_limit_exc.status = 429
     fake_msg.edit.side_effect = rate_limit_exc
     await bot._on_countdown_tick(session_id, seconds_remaining=30)
-    assert edit_state.backoff_floor == _BACKOFF_FLOOR_DEFAULT * 2
+    assert edit_state.backoff_floor == BACKOFF_FLOOR_DEFAULT * 2
 
     # Second tick: success → floor back to default.
     fake_msg.edit.side_effect = None
     await bot._on_countdown_tick(session_id, seconds_remaining=20)
-    assert edit_state.backoff_floor == _BACKOFF_FLOOR_DEFAULT
+    assert edit_state.backoff_floor == BACKOFF_FLOOR_DEFAULT
 
 
 @pytest.mark.asyncio
 async def test_429_backoff_capped_at_maximum(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
-    """Repeated 429s do not push the backoff floor above _BACKOFF_FLOOR_CAP."""
+    """Repeated 429s do not push the backoff floor above BACKOFF_FLOOR_CAP."""
     session_id, fake_msg = _seed_active_session(registry, bot)
     edit_state = bot._edit_states[session_id]
 
@@ -167,7 +167,7 @@ async def test_429_backoff_capped_at_maximum(
     for _ in range(10):
         await bot._on_countdown_tick(session_id, seconds_remaining=30)
 
-    assert edit_state.backoff_floor == _BACKOFF_FLOOR_CAP
+    assert edit_state.backoff_floor == BACKOFF_FLOOR_CAP
 
 
 # ---------------------------------------------------------------------------
