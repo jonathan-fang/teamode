@@ -50,7 +50,26 @@ class TimerMixin:
         if session is None:
             return
 
-        # Skip if a previous edit is still in flight.
+        # 429 backoff gate: skip edits until backoff_floor seconds have
+        # elapsed since the last 429. seconds_remaining counts down ~1 per
+        # real second (see run_countdown's drift correction), so the
+        # difference doubles as elapsed real time without a separate clock
+        # — keeps this deterministic under tests. The final tick (0) is not
+        # special-cased, so it can still be skipped while inside the floor.
+        if edit_state.last_429_seconds_remaining is not None:
+            elapsed = edit_state.last_429_seconds_remaining - seconds_remaining
+            if elapsed < edit_state.backoff_floor:
+                logger.debug(
+                    "Skipping edit for session %s at %ds — within 429 backoff floor",
+                    session_id,
+                    seconds_remaining,
+                )
+                return
+
+        # Skip if a previous edit is still in flight. run_countdown awaits
+        # on_tick inline (no concurrent ticks in production), so this never
+        # actually trips today — kept as a defensive no-op for a future
+        # caller that might invoke ticks concurrently.
         if edit_state.lock.locked():
             logger.debug(
                 "Skipping edit for session %s at %ds — previous edit in flight",
@@ -69,14 +88,18 @@ class TimerMixin:
             )
             try:
                 await edit_state.message.edit(content=content)
-                # Successful edit — decay backoff floor back to default.
+                # Successful edit — decay backoff floor back to default and
+                # clear the gate.
                 edit_state.backoff_floor = BACKOFF_FLOOR_DEFAULT
+                edit_state.last_429_seconds_remaining = None
             except discord.HTTPException as exc:
                 if exc.status == 429:
-                    # Rate limited — double the floor, respect the cap.
+                    # Rate limited — double the floor, respect the cap, and
+                    # arm the gate from this point.
                     edit_state.backoff_floor = min(
                         edit_state.backoff_floor * 2, BACKOFF_FLOOR_CAP
                     )
+                    edit_state.last_429_seconds_remaining = seconds_remaining
                     logger.warning(
                         "Rate limited on session %s timer edit; backoff floor now %.0fs",
                         session_id,
