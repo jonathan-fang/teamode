@@ -94,10 +94,24 @@ class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin, BreakMix
         # channel (see BreakMixin._clear_chain_state).
         self._chain_states: dict[int, _ChainState] = {}
 
-        # The in-progress five-minute break per text channel, if any.
-        # In-memory only — lost on restart. Cancelled when a new session
-        # starts in the channel (see BreakMixin._cancel_break).
+        # The in-progress break (five- or ten-minute) per text channel, if
+        # any. In-memory only — lost on restart. Cancelled when a new
+        # session starts in the channel (see BreakMixin._cancel_break).
         self._break_states: dict[int, _BreakState] = {}
+
+        # Per-channel streak of chained, qualifying session durations (each
+        # >= LONG_BREAK_MIN_SESSION_MINUTES, ending in a facilitator ✅/⛔,
+        # and — after the first — started via Go again). In-memory only —
+        # reset whenever a break starts, a session starts via /teamode, a
+        # session is too short, a follow-up times out, or a session is
+        # cancelled (see BreakMixin._reset_streak and its callers).
+        self._streaks: dict[int, list[int]] = {}
+
+        # Whether each session was started via Go again (True) or
+        # /teamode (False) — recorded at session creation, read once (and
+        # popped) by BreakMixin._post_chain_prompt via _pop_chained_flag to
+        # decide whether to extend or restart the channel's streak.
+        self._chained_via_go_again: dict[int, bool] = {}
 
         intents = discord.Intents.default()
         intents.guilds = True

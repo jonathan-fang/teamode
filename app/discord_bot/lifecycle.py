@@ -71,6 +71,9 @@ class LifecycleMixin:
             self, session_id: int, text_channel_id: str
         ) -> None: ...
 
+        def _reset_streak(self, channel_id: int) -> None: ...
+        def _pop_chained_flag(self, session_id: int) -> bool: ...
+
     # ------------------------------------------------------------------
     # Voice channel status
     # ------------------------------------------------------------------
@@ -237,6 +240,8 @@ class LifecycleMixin:
             return
 
         self._registry.mark_cancelled(session_id=session_id)
+        self._reset_streak(int(session.text_channel_id))
+        self._pop_chained_flag(session_id)
 
         setup = self._setup_messages.get(session_id)
         if setup is not None:
@@ -373,12 +378,16 @@ class LifecycleMixin:
             except asyncio.CancelledError:
                 return
             # Watchdog fired — mark timeout and clean up.
+            timed_out_session = self._registry.get(session_id)
             try:
                 self._registry.mark_followup_timeout(session_id=session_id)
             except Exception:
                 logger.exception(
                     "mark_followup_timeout failed for session %s", session_id
                 )
+            if timed_out_session is not None:
+                self._reset_streak(int(timed_out_session.text_channel_id))
+            self._pop_chained_flag(session_id)
             self._reflect_message_ids.pop(session_id, None)
             logger.info(
                 "Follow-up watchdog fired for session %s — marked followup_timeout",
@@ -603,6 +612,7 @@ class LifecycleMixin:
             return
 
         # Timeout fired. Resolve resources defensively (pops are no-ops if missing).
+        timed_out_session = self._registry.get(session_id)
         countdown_task = self._countdown_tasks.pop(session_id, None)
         voice_client = self._voice_clients.pop(session_id, None)
         edit_state = self._edit_states.pop(session_id, None)
@@ -662,5 +672,10 @@ class LifecycleMixin:
                 "Failed to mark session %s cancelled on solo-grace timeout",
                 session_id,
             )
+
+        # 6) Reset the channel's streak — a cancelled session breaks the chain.
+        if timed_out_session is not None:
+            self._reset_streak(int(timed_out_session.text_channel_id))
+        self._pop_chained_flag(session_id)
 
         await self._on_session_terminal(session_id)

@@ -260,6 +260,10 @@ class _ModalBot(Protocol):
         self, voice_channel_or_id: discord.VoiceChannel | int, status: str
     ) -> None: ...
 
+    def _reset_streak(self, channel_id: int) -> None: ...
+
+    def _pop_chained_flag(self, session_id: int) -> bool: ...
+
 
 # ---------------------------------------------------------------------------
 # IntentionModal
@@ -363,6 +367,8 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             logger.exception("Voice connect failed for session %s", self._session_id)
             await interaction.followup.send(MSG_VOICE_CONNECT_FAILED, ephemeral=True)
             self._bot._registry.mark_cancelled(session_id=self._session_id)
+            self._bot._reset_streak(int(session.text_channel_id))
+            self._bot._pop_chained_flag(self._session_id)
             # No voice status here: the bot never connected, and Discord
             # requires Manage Channels to set a voice status while
             # disconnected (see LifecycleMixin._set_voice_status).
@@ -504,6 +510,10 @@ class ViewsMixin:
         async def _set_voice_status(
             self, voice_channel_or_id: discord.VoiceChannel | int, status: str
         ) -> None: ...
+
+        def _reset_streak(self, channel_id: int) -> None: ...
+
+        def _pop_chained_flag(self, session_id: int) -> bool: ...
 
     async def _handle_timer_pick(
         self,
