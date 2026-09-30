@@ -97,8 +97,10 @@ ISO-8601 UTC timestamp at the moment the timer was confirmed and started
 
 - **Type**: TEXT (SQLite has no native datetime type; ISO-8601 sorts
   lexicographically).
-- **Format**: `YYYY-MM-DDTHH:MM:SS.sssZ` — produced by
-  `datetime.now(timezone.utc).isoformat()`.
+- **Format**: `YYYY-MM-DDTHH:MM:SS.ffffff+00:00` — produced by
+  `datetime.now(timezone.utc).isoformat()`. Python's `isoformat()`
+  renders the UTC offset as `+00:00`, not the `Z` shorthand — every
+  timestamp column in this table uses this exact format.
 - **Nullable** until the `active` transition. While the row is in
   `pending` or `intention_set` the timer has not yet started, so this
   column is NULL.
@@ -166,6 +168,27 @@ handoff occurred.
 - **Reason to store**: lets the look-back stats distinguish "ran a full
   session" from "took over a session" without altering the original
   `facilitator_id` field.
+
+---
+
+## Stats read helpers
+
+`/teamode-stats` reads through two helpers in `app/db.py` rather than
+inline SQL in the Discord-facing layer:
+
+- **`fetch_facilitator_stats_rows(conn, *, facilitator_id)`** —
+  sessions originally facilitated by `facilitator_id` (filters on the
+  ORIGINAL `facilitator_id` column; a handoff target recorded in
+  `handoff_facilitator_id` gets no credit here).
+- **`fetch_guild_stats_rows(conn, *, guild_id)`** — sessions started in
+  `guild_id`.
+
+Both filter to **qualifying** sessions only — `status` reached
+follow-up, i.e. `'completed'` or `'followup_timeout'`. A session that
+crashed, was cancelled, or is still in progress is excluded from
+stats. Each row returned is `(started_at, duration_minutes,
+completed_intention)`, aggregated in `app/stats.py` into the 7-day /
+30-day / all-time windows and the completion rate shown in the embed.
 
 ---
 

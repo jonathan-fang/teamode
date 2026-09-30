@@ -20,18 +20,39 @@ pick → intention → countdown → reverie ring → follow-up.
 
 ```
 teamode/                      ← repo root
-├── teamode.py                ← entry point (thin)
+├── teamode.py                ← entry point (thin): PID lock, ffmpeg probe, startup order
 ├── app/                      ← package
 │   ├── __init__.py
-│   ├── bot.py                ← discord.Client + slash command registration
-│   ├── session.py            ← session state machine
+│   ├── discord_bot/          ← Discord wiring only (mixins composed in client.py)
+│   │   ├── client.py         ← discord.Client + CommandTree + event handlers
+│   │   ├── commands.py       ← /teamode and /handoff registration + handlers
+│   │   ├── views.py          ← buttons, modal, welcome/timer embeds
+│   │   ├── timer.py          ← active timer edit loop
+│   │   ├── lifecycle.py      ← end-of-session, Reflect, solo grace, message cleanup
+│   │   ├── breaks.py         ← chaining and break flow
+│   │   ├── clear.py          ← /teamode-clear
+│   │   ├── stats.py          ← /teamode-stats
+│   │   └── tasks.py          ← background-task helpers
+│   ├── constants.py          ← every tunable + every Discord-facing string
+│   ├── config.py             ← env var loading (no discord import)
+│   ├── session.py            ← session state machine (Discord-free)
 │   ├── voice.py              ← voice connect/play/disconnect
-│   └── db.py                 ← SQLite schema + writes
+│   ├── db.py                 ← SQLite schema + writes
+│   ├── rate_limit.py         ← per-user/per-guild rate limiting
+│   ├── timer_format.py       ← mm:ss / progress-bar formatting
+│   ├── stats.py              ← stats aggregation (windows, streak, rate)
+│   ├── cleanup.py            ← /teamode-clear message classification
+│   └── pidlock.py            ← single-instance PID lock
 ├── assets/
-│   └── reverie.wav           ← end-of-session ring
+│   ├── reverie.wav           ← end-of-session chime
+│   └── wind-chime.wav        ← wrap-up nudge chime
+├── scripts/
+│   ├── teamode_launcher.sh   ← sources ~/.teamode-secrets, dev/stable modes
+│   └── generate_art.py       ← dev-only art candidate generator (Pillow)
 ├── tests/                    ← pytest suite
 ├── docs/                     ← Discord platform notes, schema, comparisons
-├── requirements.txt          ← pinned dependencies
+├── requirements.txt          ← pinned runtime dependencies
+├── requirements-dev.txt      ← dev-only deps (Pillow, for generate_art.py)
 ├── .project-meta/            ← conventions, UI-ADR, project-meta artifacts
 ├── .LLMAO/                   ← LLMAO workflow docs
 ├── .project-meta/USEE/       ← USEE knowledge framework (under project-meta)
@@ -43,13 +64,33 @@ product source.
 
 ### Architecture
 
-**`teamode.py`** — entry-point. Loads env vars (`DISCORD_BOT_TOKEN`,
-`TEAMODE_DB_PATH`), constructs the bot, runs the event loop. Imports
-all logic from `app.bot`.
+**`teamode.py`** — entry-point. Acquires the PID lock, probes for
+`ffmpeg` (warns, non-fatal, if missing), loads env vars
+(`DISCORD_BOT_TOKEN`, `TEAMODE_DB_PATH`), initializes the database and
+reconciles crashed sessions, constructs the bot, runs the event loop.
+Imports all logic from `app.discord_bot`.
 
-**`app/bot.py`** — discord.py `Client` + slash command tree.
-Registers `/teamode`, dispatches button/modal interactions to
-`session.py`. The Discord-facing layer.
+**`app/discord_bot/`** — Discord-facing layer, split into mixins
+composed onto one bot class in `client.py`: `CommandsMixin`
+(`/teamode`, `/handoff`), `ViewsMixin` (buttons, modal, welcome/timer
+embeds), `TimerMixin` (the active-timer edit loop), `LifecycleMixin`
+(end-of-session, Reflect, solo grace, message cleanup),
+`BreakMixin` (chaining and breaks), `ClearMixin` (`/teamode-clear`),
+`StatsMixin` (`/teamode-stats`). `client.py` owns the `discord.Client`,
+the `CommandTree`, and the `on_<event>` handlers (`on_ready`,
+`on_interaction`, `on_raw_reaction_add`, `on_voice_state_update`).
+`on_ready` syncs slash commands per guild in `TEAMODE_DEV_GUILD_ID`;
+if that env var is unset, registration is skipped entirely with a
+warning (no global-registration fallback).
+
+**`app/constants.py`** — every tunable number and every Discord-facing
+string, as named constants. Pure data: no `discord` or `app.config`
+imports, so it is readable and testable in isolation.
+
+**`app/config.py`** — env var loading (`DISCORD_BOT_TOKEN`,
+`TEAMODE_DB_PATH`, `TEAMODE_DEV_GUILD_ID`, `TEAMODE_TIMEZONE`), with
+IANA timezone resolution and fallback to UTC if even the default is
+unavailable.
 
 **`app/session.py`** — Session state machine. Pure logic, no
 discord.py imports beyond `Interaction` typing. State transitions:
@@ -58,10 +99,19 @@ discord.py imports beyond `Interaction` typing. State transitions:
 by tests directly without a live bot.
 
 **`app/voice.py`** — Voice connect, `FFmpegPCMAudio` playback of
-`assets/reverie.wav`, disconnect. Single source of truth for voice.
+`assets/reverie.wav` / `assets/wind-chime.wav`, disconnect. Single
+source of truth for voice.
 
-**`app/db.py`** — SQLite schema, connection pool, write helpers.
-See `docs/sqlite-schema.md` for the schema reference.
+**`app/db.py`** — SQLite schema, connection, write helpers, and the
+stats read helpers (`fetch_facilitator_stats_rows`,
+`fetch_guild_stats_rows`). See `docs/sqlite-schema.md` for the schema
+reference.
+
+**`app/rate_limit.py`**, **`app/timer_format.py`**, **`app/stats.py`**,
+**`app/cleanup.py`**, **`app/pidlock.py`** — flat, Discord-free,
+injectable-clock modules backing rate limiting, timer text formatting,
+`/teamode-stats` aggregation, `/teamode-clear` message classification,
+and the single-instance PID lock, respectively.
 
 ### Data Stores
 
@@ -74,14 +124,28 @@ See `docs/sqlite-schema.md` for the schema reference.
 | File | Purpose |
 |---|---|
 | `teamode.py` | Entry point — `python3 teamode.py` |
-| `app/bot.py` | Discord-facing layer, slash command + interaction routing |
+| `app/discord_bot/client.py` | discord.Client, CommandTree, event handlers, mixin composition |
+| `app/discord_bot/commands.py` | `/teamode` and `/handoff` registration + handlers |
+| `app/discord_bot/views.py` | Buttons, modal, welcome/timer embeds |
+| `app/discord_bot/timer.py` | Active timer edit loop |
+| `app/discord_bot/lifecycle.py` | End-of-session, Reflect, solo grace, message cleanup |
+| `app/discord_bot/breaks.py` | Chaining and break flow |
+| `app/discord_bot/clear.py` | `/teamode-clear` |
+| `app/discord_bot/stats.py` | `/teamode-stats` |
+| `app/constants.py` | Every tunable + every Discord-facing string |
+| `app/config.py` | Env var loading |
 | `app/session.py` | Session state machine (testable without Discord) |
-| `app/voice.py` | Voice connection + reverie playback |
-| `app/db.py` | SQLite schema and writes |
-| `assets/reverie.wav` | End-of-session ring |
+| `app/voice.py` | Voice connection + reverie/wind-chime playback |
+| `app/db.py` | SQLite schema, writes, and stats read helpers |
+| `app/pidlock.py` | Single-instance PID lock |
+| `assets/reverie.wav` | End-of-session chime |
+| `assets/wind-chime.wav` | Wrap-up nudge chime |
+| `scripts/teamode_launcher.sh` | Local launcher (dev/stable modes) |
+| `scripts/generate_art.py` | Dev-only art candidate generator |
 | `docs/discord-platform-notes.md` | Discord API reference for slash, components, voice |
 | `docs/sqlite-schema.md` | Field-by-field schema reference with citations |
 | `docs/language-library-comparison.md` | Why discord.py; hosting tradeoffs |
+| `docs/windows-shortcut.md` | Windows Terminal desktop shortcut for the launcher |
 | `.project-meta/conventions.md` | All coding standards |
 | `.project-meta/UI-ADR.md` | Discord-surface palette, identity, settled UI decisions |
 | `.LLMAO/USER-GUIDE.md` | LLMAO workflow walkthrough |
@@ -159,9 +223,9 @@ APM_RULES › Approval Workflow apply instead.
 
 ## Configuration & Platform Notes
 
-Do not hardcode local paths or tokens. Read `DISCORD_BOT_TOKEN` and
-`TEAMODE_DB_PATH` from environment. Do not check `.env` files into
-git.
+Do not hardcode local paths or tokens. Read `DISCORD_BOT_TOKEN`,
+`TEAMODE_DB_PATH`, `TEAMODE_DEV_GUILD_ID`, and `TEAMODE_TIMEZONE` from
+environment. Do not check `.env` files into git.
 
 ### Bot identity
 
