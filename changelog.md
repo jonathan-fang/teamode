@@ -56,6 +56,9 @@ Package refactor, reliability hardening, and the features that were
 - **`scripts/generate_art.py`** (dev-only, `requirements-dev.txt`) —
   deterministically generates icon/banner/avatar candidates for manual
   review and upload in the Discord Developer Portal.
+- **Application art** — `assets/app-icon.png` (1024×1024),
+  `assets/app-banner.png` (680×240), `assets/app-avatar.png`
+  (1024×1024): a flat teacup with steam on an amber saucer.
 
 ### Changed
 

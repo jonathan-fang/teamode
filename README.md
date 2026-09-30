@@ -310,8 +310,6 @@ programmatically.
 
 ## What's intentionally out of scope
 
-- Custom avatar/icon/banner art — generated but not yet finalized (see
-  Art assets above).
 - Web dashboard, cross-server analytics, AI-generated reflection
   prompts, voice transcription. Not coming.
 

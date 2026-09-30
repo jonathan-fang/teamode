@@ -26,17 +26,7 @@ anonymization were also originally scoped here — see
 
 ## Next Minor
 
-- **Custom avatar art.** Replace the placeholder avatar with a designed
-  teacup/kettle/steam image.
-
-- **Discord application identity assets — approved for creation.**
-  - Application icon: 1024×1024 PNG/JPG/GIF/WEBP, ≤ 10 MB, 1:1 aspect
-    ratio. Shown in the developer portal and as the bot user's avatar.
-    Align style with the matcha-sage / steeping-forest palette in
-    `.project-meta/UI-ADR.md`.
-  - Application banner: 680×240 PNG/JPG/GIF/WEBP, ≤ 10 MB, 17:6 aspect
-    ratio. Shown on the application's developer-portal page. Same style
-    direction as the icon.
+_Empty._
 
 ---
 
