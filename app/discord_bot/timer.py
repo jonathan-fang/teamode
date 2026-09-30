@@ -7,12 +7,11 @@ import logging
 import discord
 
 from app.constants import (
-    ACTIVE_TIMER_FMT,
     BACKOFF_FLOOR_CAP,
     BACKOFF_FLOOR_DEFAULT,
     EDIT_INTERVAL_SECONDS,
 )
-from app.discord_bot.views import _EditState, _format_intention_line
+from app.discord_bot.views import _build_active_timer_content, _EditState
 from app.session import SessionRegistry
 
 logger = logging.getLogger(__name__)
@@ -79,15 +78,21 @@ class TimerMixin:
             return
 
         async with edit_state.lock:
-            mm, ss = divmod(seconds_remaining, 60)
-            content = ACTIVE_TIMER_FMT.format(
-                intention_line=_format_intention_line(session.intention),
-                duration=session.duration_minutes,
-                mm=mm,
-                ss=ss,
+            content = _build_active_timer_content(
+                intention=session.intention,
+                duration_minutes=session.duration_minutes,
+                seconds_remaining=seconds_remaining,
+                mention_line=edit_state.mention_line,
             )
             try:
-                await edit_state.message.edit(content=content)
+                # AllowedMentions.none() is explicit belt-and-suspenders —
+                # Discord does not re-ping on message edits regardless —
+                # while the mention line itself stays in the edited content
+                # so it remains visible for the rest of the session.
+                await edit_state.message.edit(
+                    content=content,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
                 # Successful edit — decay backoff floor back to default and
                 # clear the gate.
                 edit_state.backoff_floor = BACKOFF_FLOOR_DEFAULT

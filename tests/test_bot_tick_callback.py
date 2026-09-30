@@ -186,9 +186,14 @@ async def test_edit_content_format(bot: TeaModeBot, registry: SessionRegistry) -
 
     await bot._on_countdown_tick(session_id, seconds_remaining=30)
 
-    fake_msg.edit.assert_called_once_with(
-        content="🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:30"
+    fake_msg.edit.assert_called_once()
+    call_kwargs = fake_msg.edit.call_args.kwargs
+    assert (
+        call_kwargs["content"]
+        == "🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:30"
     )
+    # AllowedMentions has no __eq__, so compare the flag that matters.
+    assert call_kwargs["allowed_mentions"].users is False
 
 
 @pytest.mark.asyncio
@@ -200,6 +205,10 @@ async def test_edit_at_zero_sends_final_format(
 
     await bot._on_countdown_tick(session_id, seconds_remaining=0)
 
-    fake_msg.edit.assert_called_once_with(
-        content="🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:00"
+    fake_msg.edit.assert_called_once()
+    call_kwargs = fake_msg.edit.call_args.kwargs
+    assert (
+        call_kwargs["content"]
+        == "🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:00"
     )
+    assert call_kwargs["allowed_mentions"].users is False
