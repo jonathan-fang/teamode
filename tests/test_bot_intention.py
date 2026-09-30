@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sqlite3
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +18,7 @@ from app.constants import (
     MSG_VOICE_CONNECT_FAILED,
 )
 from app.discord_bot import TeaModeBot
-from app.discord_bot.views import IntentionModal, _format_intention_line
+from app.discord_bot.views import IntentionModal, _format_intention_line, _SetupMessages
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
 
@@ -273,7 +275,7 @@ async def test_modal_submit_records_intention_and_posts_timer(
 
     fake_voice_client = AsyncMock()
 
-    def _close_coro(coro: object) -> None:
+    def _close_coro(coro: object, **_kwargs: object) -> None:
         # Close the coroutine so Python does not warn about it being unawaited.
         if hasattr(coro, "close"):
             coro.close()  # type: ignore[union-attr]
@@ -283,7 +285,7 @@ async def test_modal_submit_records_intention_and_posts_timer(
             "app.discord_bot.views.voice.connect", return_value=fake_voice_client
         ) as mock_connect,
         patch(
-            "app.discord_bot.views.asyncio.create_task", side_effect=_close_coro
+            "app.discord_bot.tasks.asyncio.create_task", side_effect=_close_coro
         ) as mock_create_task,
     ):
         await modal.on_submit(inter)
@@ -332,6 +334,45 @@ async def test_modal_submit_records_intention_and_posts_timer(
 
 
 @pytest.mark.asyncio
+async def test_modal_submit_cancels_pending_expiry(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """Submitting the intention moves the session out of PENDING, so the
+    pending-expiry watchdog is cancelled and dropped."""
+    session_id = _seed_session_with_duration(
+        registry, facilitator_id=111, duration_minutes=25
+    )
+    expiry_task = asyncio.create_task(asyncio.sleep(60))
+    bot._pending_expiry_tasks[session_id] = expiry_task
+
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
+    modal = IntentionModal(
+        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
+    )
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+    inter.channel = fake_voice_channel
+
+    def _close_coro(coro: object, **_kwargs: object) -> None:
+        if hasattr(coro, "close"):
+            coro.close()  # type: ignore[union-attr]
+
+    try:
+        with (
+            patch("app.discord_bot.views.voice.connect", return_value=AsyncMock()),
+            patch("app.discord_bot.tasks.asyncio.create_task", side_effect=_close_coro),
+        ):
+            await modal.on_submit(inter)
+
+        assert session_id not in bot._pending_expiry_tasks
+        assert expiry_task.cancelling() > 0 or expiry_task.cancelled()
+    finally:
+        expiry_task.cancel()
+
+
+@pytest.mark.asyncio
 async def test_modal_submit_voice_connect_failure_cancels_session(
     bot: TeaModeBot,
     registry: SessionRegistry,
@@ -356,7 +397,7 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
 
     with (
         patch("app.discord_bot.views.voice.connect", side_effect=Exception("no voice")),
-        patch("app.discord_bot.views.asyncio.create_task") as mock_create_task,
+        patch("app.discord_bot.tasks.asyncio.create_task") as mock_create_task,
     ):
         await modal.on_submit(inter)
 
@@ -375,3 +416,171 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
 
     # No countdown task scheduled.
     mock_create_task.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Intention submit disables the welcome's duration buttons via the channel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_modal_submit_disables_welcome_buttons(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """Submitting the intention edits the welcome message, via the channel's
+    partial message, with all duration buttons disabled."""
+    session_id = _seed_session_with_duration(
+        registry, facilitator_id=111, duration_minutes=25
+    )
+    bot._setup_messages[session_id] = _SetupMessages(
+        channel_id=444, welcome_message_id=100
+    )
+
+    fake_welcome_partial = AsyncMock()
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_voice_channel.get_partial_message = MagicMock(
+        return_value=fake_welcome_partial
+    )
+    fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
+
+    modal = IntentionModal(
+        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
+    )
+    text_input = cast(
+        discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
+    )
+    text_input._value = "finish the changelog"
+
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+
+    with (
+        patch("app.discord_bot.views.voice.connect", return_value=AsyncMock()),
+        patch(
+            "app.discord_bot.tasks.asyncio.create_task",
+            side_effect=lambda c, **_: c.close(),
+        ),
+    ):
+        await modal.on_submit(inter)
+
+    fake_voice_channel.get_partial_message.assert_called_once_with(100)
+    fake_welcome_partial.edit.assert_awaited_once()
+    view = fake_welcome_partial.edit.call_args.kwargs["view"]
+    for child in view.children:
+        assert isinstance(child, discord.ui.Button)
+        assert child.disabled is True
+
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.state == SessionState.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_modal_submit_welcome_edit_failure_logged_session_still_active(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failure disabling the welcome's buttons on submit is logged at
+    WARNING and the session still becomes ACTIVE (voice connect etc. must
+    not be blocked by it)."""
+    session_id = _seed_session_with_duration(
+        registry, facilitator_id=111, duration_minutes=25
+    )
+    bot._setup_messages[session_id] = _SetupMessages(
+        channel_id=444, welcome_message_id=100
+    )
+
+    fake_welcome_partial = AsyncMock()
+    fake_welcome_partial.edit = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(), "boom")
+    )
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_voice_channel.get_partial_message = MagicMock(
+        return_value=fake_welcome_partial
+    )
+    fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
+
+    modal = IntentionModal(
+        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
+    )
+    text_input = cast(
+        discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
+    )
+    text_input._value = "finish the changelog"
+
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+
+    with (
+        patch("app.discord_bot.views.voice.connect", return_value=AsyncMock()),
+        patch(
+            "app.discord_bot.tasks.asyncio.create_task",
+            side_effect=lambda c, **_: c.close(),
+        ),
+        caplog.at_level(logging.WARNING, logger="app.discord_bot.views"),
+    ):
+        await modal.on_submit(inter)
+
+    assert any("Failed to disable welcome buttons" in r.message for r in caplog.records)
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.state == SessionState.ACTIVE
+
+
+# ---------------------------------------------------------------------------
+# Double-submit guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_second_submit_for_non_pending_session_is_refused(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """A second submit for a session no longer PENDING (e.g. the intention
+    was already recorded by a first submit) gets the ephemeral
+    MSG_SESSION_INACTIVE refusal and changes nothing — no timer send, no
+    voice connect, no exception."""
+    session_id = _seed_session_with_duration(
+        registry, facilitator_id=111, duration_minutes=25
+    )
+    # Advance the session out of PENDING, as a first submit would have.
+    registry.set_intention(session_id=session_id, intention="already submitted")
+
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_voice_channel.send = AsyncMock()
+    modal = IntentionModal(
+        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
+    )
+    text_input = cast(
+        discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
+    )
+    text_input._value = "second attempt"
+
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+
+    with (
+        patch("app.discord_bot.views.voice.connect") as mock_connect,
+        patch("app.discord_bot.tasks.asyncio.create_task") as mock_create_task,
+    ):
+        await modal.on_submit(inter)
+
+    inter.response.send_message.assert_called_once()
+    kwargs = inter.response.send_message.call_args.kwargs
+    assert kwargs.get("ephemeral") is True
+    embed: discord.Embed = kwargs["embed"]
+    assert embed.description == MSG_SESSION_INACTIVE
+
+    # Nothing else happened: no defer, no timer send, no voice connect.
+    inter.response.defer.assert_not_called()
+    fake_voice_channel.send.assert_not_called()
+    mock_connect.assert_not_called()
+    mock_create_task.assert_not_called()
+
+    # The original intention is untouched.
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.intention == "already submitted"

@@ -32,7 +32,8 @@ from app.constants import (
     WELCOME_EMBED_DESCRIPTION,
     WELCOME_EMBED_TITLE,
 )
-from app.session import SessionRegistry
+from app.discord_bot.tasks import spawn_logged
+from app.session import SessionRegistry, SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,34 @@ def _format_intention_line(intention: str | None) -> str:
     return INTENTION_LINE_UNSET
 
 
+def _build_active_timer_content(
+    *,
+    intention: str | None,
+    duration_minutes: int | None,
+    seconds_remaining: int,
+    mention_line: str,
+) -> str:
+    """Build the active-timer message content — the ONE place both the
+    initial send and every tick edit build this string, so they can never
+    drift apart.
+
+    ``mention_line`` is the pre-snapshotted @-mention line for the
+    session's non-bot voice members (built once, when the timer message is
+    first sent) — empty when there are none, in which case no extra line
+    is added.
+    """
+    mm, ss = divmod(seconds_remaining, 60)
+    base = ACTIVE_TIMER_FMT.format(
+        intention_line=_format_intention_line(intention),
+        duration=duration_minutes,
+        mm=mm,
+        ss=ss,
+    )
+    if mention_line:
+        return f"{base}\n{mention_line}"
+    return base
+
+
 # ---------------------------------------------------------------------------
 # Per-session edit-state holder
 # ---------------------------------------------------------------------------
@@ -81,6 +110,46 @@ class _EditState:
     message: discord.Message
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     backoff_floor: float = BACKOFF_FLOOR_DEFAULT
+    # seconds_remaining at the moment of the last HTTP 429, or None if none
+    # has happened yet (or the last edit since then succeeded). Ticks are
+    # gated until backoff_floor seconds have elapsed since that value.
+    last_429_seconds_remaining: int | None = None
+    # Snapshot of the @-mention line for non-bot voice members, built once
+    # when the timer message is first sent, so tick edits reuse it verbatim.
+    mention_line: str = ""
+
+
+@dataclass
+class _SetupMessages:
+    """Message ids captured at session start, for later edit/delete.
+
+    ``channel_id`` is the text-chat channel (shared id with the voice
+    channel) the welcome message was posted in — messages are always
+    edited/deleted through the channel, never through the interaction
+    webhook, since interaction tokens expire well before a session ends.
+    """
+
+    channel_id: int
+    welcome_message_id: int
+    intention_message_id: int | None = None
+
+
+@dataclass
+class _ChannelCleanup:
+    """Message ids from the most recently finished session in a text
+    channel, kept so the *next* ``/teamode`` invocation in that channel can
+    clean them up.
+
+    ``times_up_id`` is the "Time's up" message, ``reflect_id`` is the
+    Reflect (facilitator follow-up prompt) message, and ``why_id`` is the
+    "share what got in the way" line posted only when the facilitator
+    answered ⛔. In-memory only — lost on restart (accepted), like the
+    dict it replaces.
+    """
+
+    times_up_id: int | None = None
+    reflect_id: int | None = None
+    why_id: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -100,10 +169,13 @@ class _ModalBot(Protocol):
     members below (see ``ViewsMixin``), no cast required.
     """
 
+    client: discord.Client
     _registry: SessionRegistry
     _voice_clients: dict[int, discord.VoiceClient]
     _edit_states: dict[int, _EditState]
     _countdown_tasks: dict[int, asyncio.Task[None]]
+    _pending_expiry_tasks: dict[int, asyncio.Task[None]]
+    _setup_messages: dict[int, _SetupMessages]
 
     async def _on_countdown_tick(
         self, session_id: int, seconds_remaining: int
@@ -115,6 +187,10 @@ class _ModalBot(Protocol):
         session_id: int,
         voice_client: discord.VoiceClient,
         channel: discord.abc.Messageable | None,
+    ) -> None: ...
+
+    async def _on_session_terminal(
+        self, session_id: int, *, delete_setup_messages: bool = True
     ) -> None: ...
 
 
@@ -159,6 +235,16 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         self._voice_channel = voice_channel
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        # Double-submit guard: the session must still be PENDING. Because
+        # `set_intention` is synchronous and transitions the session before
+        # any `await`, a check here — before that call — is sufficient under
+        # asyncio's single-threaded cooperative scheduling: no other submit
+        # can interleave between this check and the transition below.
+        session_check = self._bot._registry.get(self._session_id)
+        if not _session_actionable(session_check, expect=SessionState.PENDING):
+            await _send_refusal(interaction, MSG_SESSION_INACTIVE)
+            return
+
         component = self.intention_field.component
         if not isinstance(component, discord.ui.TextInput):
             # Genuinely impossible given the class-level declaration above,
@@ -174,8 +260,32 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             session_id=self._session_id,
             intention=intention_text,
         )
+        # The session has left PENDING — the pending-expiry watchdog no
+        # longer applies.
+        expiry_task = self._bot._pending_expiry_tasks.pop(self._session_id, None)
+        if expiry_task is not None:
+            expiry_task.cancel()
         # Acknowledge the modal interaction without cluttering the channel.
         await interaction.response.defer(ephemeral=True)
+
+        # Disable the welcome message's duration buttons now that the
+        # intention has been submitted — re-picking a duration no longer
+        # makes sense past this point. Edited through the channel (the
+        # welcome lives in the voice channel's text chat), never through the
+        # interaction webhook. Best-effort: a failure here must not block
+        # voice connect / session activation below.
+        setup = self._bot._setup_messages.get(self._session_id)
+        if setup is not None:
+            try:
+                await self._voice_channel.get_partial_message(
+                    setup.welcome_message_id
+                ).edit(view=_build_timer_view(self._session_id, disabled=True))
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.warning(
+                    "Failed to disable welcome buttons on intention submit"
+                    " for session %s",
+                    self._session_id,
+                )
 
         # --- Connect voice ---
         # Use the channel resolved at click-handler time — no REST round-trip.
@@ -186,6 +296,7 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             logger.exception("Voice connect failed for session %s", self._session_id)
             await interaction.followup.send(MSG_VOICE_CONNECT_FAILED, ephemeral=True)
             self._bot._registry.mark_cancelled(session_id=self._session_id)
+            await self._bot._on_session_terminal(self._session_id)
             return
 
         # Stash the voice client so the solo-grace flow can disconnect it.
@@ -194,18 +305,32 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         # --- Advance to ACTIVE and post the timer message ---
         self._bot._registry.mark_active(session_id=self._session_id)
         assert session.duration_minutes is not None
-        initial_content = ACTIVE_TIMER_FMT.format(
-            intention_line=_format_intention_line(session.intention),
-            duration=session.duration_minutes,
-            mm=session.duration_minutes,
-            ss=0,
+
+        # Snapshot the @-mention set for non-bot voice members — the same
+        # filter used for the participant prompt — so the initial timer
+        # message pings everyone present. Stored on the edit state so tick
+        # edits reuse it verbatim without re-pinging (see timer.py, which
+        # sends edits with AllowedMentions.none()).
+        bot_id = self._bot.client.user.id if self._bot.client.user else None
+        mention_members = [
+            m for m in voice_channel.members if not m.bot and m.id != bot_id
+        ]
+        mention_line = " ".join(m.mention for m in mention_members)
+
+        initial_content = _build_active_timer_content(
+            intention=session.intention,
+            duration_minutes=session.duration_minutes,
+            seconds_remaining=session.duration_minutes * 60,
+            mention_line=mention_line,
         )
         # Send on the voice channel resolved at click-handler time — the same
         # typed reference used to connect above, so no cast is needed here.
         timer_message = await voice_channel.send(initial_content)
 
         # Stash edit state so the tick callback can reach it.
-        self._bot._edit_states[self._session_id] = _EditState(message=timer_message)
+        self._bot._edit_states[self._session_id] = _EditState(
+            message=timer_message, mention_line=mention_line
+        )
 
         # --- Schedule countdown, then run the full end-of-session sequence ---
         session_id = self._session_id
@@ -240,7 +365,7 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
                 channel=channel,
             )
 
-        task = asyncio.create_task(_run_and_followup())
+        task = spawn_logged(_run_and_followup(), name=f"session-followup:{session_id}")
         self._bot._countdown_tasks[session_id] = task
 
 
@@ -256,10 +381,13 @@ class ViewsMixin:
     # can type-check the mixin's own methods in isolation, and so `self`
     # structurally satisfies `_ModalBot` when passed to IntentionModal
     # (see `_ModalBot` above) without a cast.
+    client: discord.Client
     _registry: SessionRegistry
     _voice_clients: dict[int, discord.VoiceClient]
     _edit_states: dict[int, _EditState]
     _countdown_tasks: dict[int, asyncio.Task[None]]
+    _pending_expiry_tasks: dict[int, asyncio.Task[None]]
+    _setup_messages: dict[int, _SetupMessages]
 
     if TYPE_CHECKING:
         # Methods provided by TimerMixin / LifecycleMixin at runtime — declared
@@ -278,6 +406,10 @@ class ViewsMixin:
             channel: discord.abc.Messageable | None,
         ) -> None: ...
 
+        async def _on_session_terminal(
+            self, session_id: int, *, delete_setup_messages: bool = True
+        ) -> None: ...
+
     async def _handle_timer_pick(
         self,
         interaction: discord.Interaction,
@@ -286,20 +418,13 @@ class ViewsMixin:
     ) -> None:
         """Handle a timer-pick button click."""
         session = self._registry.get(session_id)
-        if session is None:
-            embed = discord.Embed(
-                description=MSG_SESSION_INACTIVE,
-                color=COLORS["refusal"],
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+        if not _session_actionable(session, expect=SessionState.PENDING):
+            await _send_refusal(interaction, MSG_SESSION_INACTIVE)
             return
+        assert session is not None  # narrowed by _session_actionable above
 
         if str(interaction.user.id) != session.facilitator_id:
-            embed = discord.Embed(
-                description=MSG_NOT_FACILITATOR,
-                color=COLORS["refusal"],
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await _send_refusal(interaction, MSG_NOT_FACILITATOR)
             return
 
         # Parse the duration value from the custom_id.
@@ -312,11 +437,7 @@ class ViewsMixin:
         # Reject any duration not offered by the timer-pick buttons (e.g. a
         # tampered or stale custom_id) — refuse without advancing state.
         if duration_minutes not in DURATIONS_MINUTES:
-            embed = discord.Embed(
-                description=MSG_SESSION_INACTIVE,
-                color=COLORS["refusal"],
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await _send_refusal(interaction, MSG_SESSION_INACTIVE)
             return
 
         self._registry.set_duration(
@@ -324,15 +445,14 @@ class ViewsMixin:
             duration_minutes=duration_minutes,
         )
 
-        # Disable the timer-pick buttons so a second click is impossible.
-        # Must be done before opening the modal (responding to the interaction
-        # with a modal consumes the response slot).
-        assert interaction.message is not None
-        view = discord.ui.View.from_message(interaction.message)
-        for child in view.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-        await interaction.message.edit(view=view)
+        # The pending-expiry watchdog stays armed: the session is still
+        # PENDING until the intention modal is submitted, and a dismissed
+        # modal (with the duration buttons still enabled) must still expire.
+
+        # The welcome's duration buttons stay enabled here — the facilitator
+        # may dismiss the modal and re-pick a duration; the latest pick wins
+        # (set_duration overwrites). Buttons are disabled once the intention
+        # is actually submitted (see IntentionModal.on_submit).
 
         # interaction.channel is guaranteed to be a VoiceChannel here — the
         # /teamode invocation guard (Guard 1 in _handle_teamode) already
@@ -344,6 +464,36 @@ class ViewsMixin:
             voice_channel=interaction.channel,
         )
         await interaction.response.send_modal(modal)
+
+
+# ---------------------------------------------------------------------------
+# Shared stale-button handling
+# ---------------------------------------------------------------------------
+
+
+def _session_actionable(
+    session: session_module.Session | None, *, expect: SessionState
+) -> bool:
+    """Return whether a component interaction on *session* should proceed.
+
+    ``False`` covers every "stale button" case: the session is missing
+    (e.g. after a restart), terminal, or not in the state the button
+    expects (e.g. a timer-pick after the duration was already picked).
+    Callers refuse with :data:`MSG_SESSION_INACTIVE` when this is ``False``.
+    """
+    if session is None:
+        return False
+    return session.state == expect
+
+
+async def _send_refusal(interaction: discord.Interaction, message: str) -> None:
+    """Send the standard ephemeral refusal embed (muted-grey, plain body).
+
+    Shared by every guard refusal — stale-session, wrong-state, and
+    non-facilitator — so new buttons get consistent styling for free.
+    """
+    embed = discord.Embed(description=message, color=COLORS["refusal"])
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ---------------------------------------------------------------------------
@@ -365,11 +515,12 @@ def _build_welcome_embed() -> discord.Embed:
     return embed
 
 
-def _build_timer_view(session_id: int) -> discord.ui.View:
+def _build_timer_view(session_id: int, *, disabled: bool = False) -> discord.ui.View:
     """Build the duration timer-pick button row for *session_id*.
 
     Custom_ids follow UI-ADR § "Custom_id namespace":
-    ``teamode:<session_id>:timer:<value>``.
+    ``teamode:<session_id>:timer:<value>``. Pass ``disabled=True`` to build
+    the all-disabled row shown after pending expiry.
     """
     view = discord.ui.View()
     for minutes in DURATIONS_MINUTES:
@@ -377,6 +528,7 @@ def _build_timer_view(session_id: int) -> discord.ui.View:
             label=TIMER_BUTTON_LABEL.format(minutes=minutes),
             custom_id=f"teamode:{session_id}:timer:{minutes}",
             style=discord.ButtonStyle.secondary,
+            disabled=disabled,
         )
         view.add_item(button)
     return view

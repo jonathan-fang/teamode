@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
@@ -27,7 +28,13 @@ from app.constants import (
     TEAMODE_COMMAND_DESCRIPTION,
     WELCOME_PROMPT_DELAY_SECONDS,
 )
-from app.discord_bot.views import COLORS, _build_timer_view, _build_welcome_embed
+from app.discord_bot.views import (
+    COLORS,
+    _build_timer_view,
+    _build_welcome_embed,
+    _ChannelCleanup,
+    _SetupMessages,
+)
 from app.rate_limit import RateLimiter
 from app.session import SessionRegistry
 
@@ -43,6 +50,13 @@ class CommandsMixin:
     tree: app_commands.CommandTree
     _registry: SessionRegistry
     _rate_limiter: RateLimiter
+    _setup_messages: dict[int, _SetupMessages]
+    _channel_cleanup: dict[int, _ChannelCleanup]
+
+    if TYPE_CHECKING:
+        # Provided by LifecycleMixin — declared here, type-checking only,
+        # so pyright can check this mixin's own methods in isolation.
+        def _arm_pending_expiry(self, session_id: int) -> None: ...
 
     def _register_command(self) -> None:
         """Register /teamode and /handoff on the global command tree.
@@ -161,6 +175,48 @@ class CommandsMixin:
             facilitator_id=str(interaction.user.id),
         )
 
+        # Clean up the previous session's leftover messages in this channel,
+        # if any — this also covers a future "Go again" button reusing this
+        # same start path. Each step is independent and best-effort: a
+        # failure is logged and does not block the others or the new session.
+        previous_cleanup = self._channel_cleanup.pop(interaction.channel.id, None)
+        if previous_cleanup is not None:
+            if previous_cleanup.times_up_id is not None:
+                try:
+                    await interaction.channel.get_partial_message(
+                        previous_cleanup.times_up_id
+                    ).delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logger.warning(
+                        "Failed to delete previous Time's up message %s in channel %s",
+                        previous_cleanup.times_up_id,
+                        interaction.channel.id,
+                    )
+            if previous_cleanup.why_id is not None:
+                try:
+                    await interaction.channel.get_partial_message(
+                        previous_cleanup.why_id
+                    ).delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logger.warning(
+                        "Failed to delete previous follow-up why message %s"
+                        " in channel %s",
+                        previous_cleanup.why_id,
+                        interaction.channel.id,
+                    )
+            if previous_cleanup.reflect_id is not None:
+                try:
+                    await interaction.channel.get_partial_message(
+                        previous_cleanup.reflect_id
+                    ).edit(embed=None)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logger.warning(
+                        "Failed to strip embed from previous Reflect message %s"
+                        " in channel %s",
+                        previous_cleanup.reflect_id,
+                        interaction.channel.id,
+                    )
+
         # Build the welcome embed.
         embed = _build_welcome_embed()
 
@@ -168,6 +224,19 @@ class CommandsMixin:
         view = _build_timer_view(session.session_id)
 
         await interaction.response.send_message(embed=embed, view=view)
+
+        # Capture the welcome message id — all later edits/deletes go
+        # through the channel, never through the interaction webhook, since
+        # interaction tokens expire well before a session ends.
+        welcome_message = await interaction.original_response()
+        self._setup_messages[session.session_id] = _SetupMessages(
+            channel_id=interaction.channel.id,
+            welcome_message_id=welcome_message.id,
+        )
+
+        # Arm the pending-expiry watchdog — cancelled once a duration is
+        # picked (see ViewsMixin._handle_timer_pick).
+        self._arm_pending_expiry(session.session_id)
 
         # Post the participant prompt after the welcome embed.
         await asyncio.sleep(WELCOME_PROMPT_DELAY_SECONDS)
@@ -183,7 +252,14 @@ class CommandsMixin:
         else:
             mentions_prefix = ""
         participant_prompt = MSG_PARTICIPANT_PROMPT.format(mentions=mentions_prefix)
-        await interaction.followup.send(participant_prompt, ephemeral=False)
+        # wait=True to get the WebhookMessage id — deleted via the channel
+        # (never the webhook) at every non-expiry terminal state.
+        intention_message = await interaction.followup.send(
+            participant_prompt, ephemeral=False, wait=True
+        )
+        setup = self._setup_messages.get(session.session_id)
+        if setup is not None:
+            setup.intention_message_id = intention_message.id
 
     async def _handle_handoff(
         self, interaction: discord.Interaction, member: discord.Member

@@ -13,7 +13,12 @@ from app.config import TEAMODE_DEV_GUILD_IDS, TEAMODE_TIMEZONE
 from app.discord_bot.commands import CommandsMixin
 from app.discord_bot.lifecycle import LifecycleMixin
 from app.discord_bot.timer import TimerMixin
-from app.discord_bot.views import ViewsMixin, _EditState
+from app.discord_bot.views import (
+    ViewsMixin,
+    _ChannelCleanup,
+    _EditState,
+    _SetupMessages,
+)
 from app.rate_limit import RateLimiter
 from app.session import SessionRegistry
 
@@ -64,6 +69,22 @@ class TeaModeBot(CommandsMixin, ViewsMixin, TimerMixin, LifecycleMixin):
         # Armed when the facilitator leaves and no other humans remain.
         # Cancelled on facilitator rejoin; self-clearing on timeout.
         self._solo_grace_tasks: dict[int, asyncio.Task[None]] = {}
+
+        # Per-session pending-expiry watchdog tasks; keyed by session_id.
+        # Armed at session start; cancelled once a duration is picked;
+        # self-clearing (and cancelling the session) on timeout.
+        self._pending_expiry_tasks: dict[int, asyncio.Task[None]] = {}
+
+        # Per-session welcome / Set-Intention message ids, keyed by
+        # session_id — captured at session start for later edit/delete via
+        # the channel (never the interaction webhook).
+        self._setup_messages: dict[int, _SetupMessages] = {}
+
+        # The most recently finished session's cleanup-relevant message ids
+        # per text-channel id (Time's up, Reflect, and the ⛔ "why" line).
+        # In-memory only — lost on restart (accepted). Cleaned up when the
+        # next session starts in that channel.
+        self._channel_cleanup: dict[int, _ChannelCleanup] = {}
 
         intents = discord.Intents.default()
         intents.guilds = True

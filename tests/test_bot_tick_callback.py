@@ -145,9 +145,11 @@ async def test_429_backoff_decays_on_success(
     await bot._on_countdown_tick(session_id, seconds_remaining=30)
     assert edit_state.backoff_floor == BACKOFF_FLOOR_DEFAULT * 2
 
-    # Second tick: success → floor back to default.
+    # Second tick, past the (doubled) backoff floor: success → floor back to
+    # default. seconds_remaining=0 (the final tick, always edit-eligible)
+    # is 30s past the 429, well past the 20s floor, so the gate has cleared.
     fake_msg.edit.side_effect = None
-    await bot._on_countdown_tick(session_id, seconds_remaining=20)
+    await bot._on_countdown_tick(session_id, seconds_remaining=0)
     assert edit_state.backoff_floor == BACKOFF_FLOOR_DEFAULT
 
 
@@ -163,9 +165,11 @@ async def test_429_backoff_capped_at_maximum(
     rate_limit_exc.status = 429
     fake_msg.edit.side_effect = rate_limit_exc
 
-    # Fire enough 429s to saturate the cap.
-    for _ in range(10):
-        await bot._on_countdown_tick(session_id, seconds_remaining=30)
+    # Fire enough 429s to saturate the cap. Each call's seconds_remaining
+    # drops well past the current floor so the backoff gate never skips
+    # the attempt (skipped attempts wouldn't double the floor).
+    for i in range(10):
+        await bot._on_countdown_tick(session_id, seconds_remaining=1000 - i * 100)
 
     assert edit_state.backoff_floor == BACKOFF_FLOOR_CAP
 
@@ -182,9 +186,14 @@ async def test_edit_content_format(bot: TeaModeBot, registry: SessionRegistry) -
 
     await bot._on_countdown_tick(session_id, seconds_remaining=30)
 
-    fake_msg.edit.assert_called_once_with(
-        content="🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:30"
+    fake_msg.edit.assert_called_once()
+    call_kwargs = fake_msg.edit.call_args.kwargs
+    assert (
+        call_kwargs["content"]
+        == "🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:30"
     )
+    # AllowedMentions has no __eq__, so compare the flag that matters.
+    assert call_kwargs["allowed_mentions"].users is False
 
 
 @pytest.mark.asyncio
@@ -196,6 +205,10 @@ async def test_edit_at_zero_sends_final_format(
 
     await bot._on_countdown_tick(session_id, seconds_remaining=0)
 
-    fake_msg.edit.assert_called_once_with(
-        content="🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:00"
+    fake_msg.edit.assert_called_once()
+    call_kwargs = fake_msg.edit.call_args.kwargs
+    assert (
+        call_kwargs["content"]
+        == "🍵 Facilitator's Intention: test intention\n1 min session\n⏳ 00:00"
     )
+    assert call_kwargs["allowed_mentions"].users is False

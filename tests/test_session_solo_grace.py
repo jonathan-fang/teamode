@@ -288,7 +288,7 @@ async def test_solo_leave_arms_watchdog(
     _install_fake_client_user(bot, user_id=999)
 
     with patch(
-        "app.discord_bot.lifecycle.asyncio.create_task", wraps=asyncio.create_task
+        "app.discord_bot.tasks.asyncio.create_task", wraps=asyncio.create_task
     ) as mock_create:
         await bot.on_voice_state_update(facilitator, before, after)
 
