@@ -26,7 +26,11 @@ Last reviewed: 2026-09-30 (post `v26Q3.0.0.0` — reflects landed code).
   (dev-only, see README § "Art assets"); a person picks and uploads the
   finals in the Developer Portal. Shipped finals: `assets/app-icon.png`,
   `assets/app-banner.png`, `assets/app-avatar.png` — a flat teacup with
-  steam on an amber saucer, pale-sage ground.
+  steam on an amber saucer, pale-sage ground. The art is procedural,
+  not model-generated: the script draws fixed Pillow shapes (circles,
+  arcs, curves) with no randomness or image model, so re-running it
+  produces byte-identical PNGs. Kept in the repo as the record of how
+  the shipped art was made.
 
 ---
 
@@ -435,6 +439,9 @@ them, not reconsider them.
   it, so the total effort is about the same. It would also add a
   second command, an accept/decline button pair, pending-request
   state, and a timeout. The simpler single-command model wins.
+- **`/clear` stays gated on the invoker's Manage Messages.** Ocha could
+  delete its own messages without it, but the gate prevents griefing
+  and repeated long scans.
 
 ---
 

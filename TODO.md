@@ -139,6 +139,3 @@ shortened to `/clear` and `/stats`; `/teamode` and `/handoff` stay
 as-is. Discoverability handled via Discord's per-app command filter
 (type the bot's name, e.g. `/ocha`, in the slash-command picker) rather
 than prefixing every command with `teamode-` — documented in README.
-
-- [ ] Apparently ocha doesn't need manage messages to delete it's own messages, including old ones? So I could have it so that anybody can trigger it, is that desired?
-- [ ] minor generate art doesn't really belong in git it's a one time thing ...? Also ai art controversial atm 
