@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Verified
+
+- **Automatic RNG handoff verified live in Discord.** When the
+  facilitator leaves with others remaining, the session is reassigned
+  to a remaining member. This was one of the eight live paths listed
+  as unverified in v26Q3.0.0.0; seven remain.
+
 ## v26Q3.0.0.0 — 2026-09-30
 
 Package refactor, reliability hardening, and the features that were

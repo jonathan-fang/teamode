@@ -127,5 +127,9 @@ shortened to `/clear` and `/stats`; `/teamode` and `/handoff` stay
 as-is. Discoverability handled via Discord's per-app command filter
 (type the bot's name, e.g. `/ocha`, in the slash-command picker) rather
 than prefixing every command with `teamode-` — documented in README.
+
+Automatic RNG handoff — resolved: verified live in Discord 2026-10-01
+(facilitator leaves with others remaining → session reassigned);
+recorded in `changelog.md` § Unreleased.
 - [ ] Apparently ocha doesn't need manage messages to delete it's own messages, including old ones? So I could have it so that anybody can trigger it, is that desired? Minor to input in Todo md, not planning to touch it for another quarter. There will never be a time a codebase considered nothing can be improved or change because circumstances change .
 - [ ] minor generate art doesn't really belong in git it's a one time thing ...? Also ai art controversial atm 
