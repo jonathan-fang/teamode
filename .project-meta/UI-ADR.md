@@ -424,6 +424,13 @@ them, not reconsider them.
 - **The teacup ASCII banner (`TEACUP_BANNER`) is AI-generated text**,
   approved by the User as the sole exception to the no-AI-generated
   runtime-text rule (see `AGENTS.md` § Execution Constraints).
+- **No `/handoff-request` command.** A participant who wants the
+  facilitator role asks in voice or chat, and the current facilitator
+  runs `/handoff @them`. A request-and-accept flow would save one step
+  for the requester, but the facilitator still has to act to accept
+  it, so the total effort is about the same. It would also add a
+  second command, an accept/decline button pair, pending-request
+  state, and a timeout. The simpler single-command model wins.
 
 ---
 
@@ -432,7 +439,9 @@ them, not reconsider them.
 The following remain unverified against a real Discord gateway (manual
 smoke test, not unit-testable): non-facilitator reaction, 3-minute
 Reflect timeout, `/handoff` manual happy path, `/handoff` refusal
-branches, automatic RNG handoff, solo-grace rejoin cancel, solo-grace
-5-minute timeout, and wifi-drop reconnect. See `TODO.md` § Notes for
-the long-break-streak and `/clear`-permission checks postponed
-the same way.
+branches (no session, not facilitator, target not in voice;
+bot-target and self verified 2026-10-01), solo-grace rejoin cancel,
+solo-grace 5-minute timeout, wifi-drop reconnect, and participant
+tracking. Automatic RNG handoff was verified live 2026-10-01. See
+`TODO.md` § Notes for the long-break-streak, `/clear`-permission, and
+participant-tracking checks postponed the same way.
