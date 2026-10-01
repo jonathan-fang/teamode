@@ -123,6 +123,14 @@ until promoted.
   without Manage Messages and confirm the ephemeral refusal "You need
   the Manage Messages permission to run /clear." (other smoke
   steps passed; delete pacing via `CLEAR_DELETE_INTERVAL_SECONDS`).
+- **Participant tracking — manual Discord check postponed; test in
+  production.** Merged untested live. (1) Two humans in voice →
+  `/teamode`, pick a duration, submit an intention; (2) a third human
+  joins voice while the timer runs; (3) optionally one of the first two
+  leaves and rejoins; (4) run
+  `sqlite3 -readonly sessions.db "SELECT * FROM session_participants ORDER BY session_id DESC LIMIT 20;"`
+  — expect the first two with `joined_late=0`, the third with
+  `joined_late=1`, the rejoiner still `0`, and no row for Ocha.
 
 Command naming — resolved: `/teamode-clear` and `/teamode-stats` were
 shortened to `/clear` and `/stats`; `/teamode` and `/handoff` stay
