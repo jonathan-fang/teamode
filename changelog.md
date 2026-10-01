@@ -17,6 +17,13 @@
   facilitator leaves with others remaining, the session is reassigned
   to a remaining member. This was one of the eight live paths listed
   as unverified in v26Q3.0.0.0; seven remain.
+- **`/handoff` refusals for Ocha and self verified live in Discord.**
+  Naming the bot as the target returns the ephemeral "Pick a human
+  voice-channel member." refusal; the facilitator naming themselves
+  returns "You are already the facilitator." In both cases the
+  facilitator is unchanged. This covers two of the `/handoff` refusal
+  branches; the others (no session, not facilitator, target not in
+  voice) remain unverified live.
 
 ## v26Q3.0.0.0 — 2026-09-30
 
