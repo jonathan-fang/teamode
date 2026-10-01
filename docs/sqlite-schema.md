@@ -198,6 +198,7 @@ Bots (including Ocha) are never recorded.
 ACTIVE.
 
 ### Semantics
+- Feeds the `/stats` "You" section (see `fetch_user_stats_rows`).
 - Writes use `INSERT OR IGNORE`: one row per person per session. If
   someone leaves and rejoins, the first row is kept (so a start-of-session
   member stays `joined_late = 0`).
@@ -214,10 +215,16 @@ ACTIVE.
 `/stats` reads through two helpers in `app/db.py` rather than
 inline SQL in the Discord-facing layer:
 
-- **`fetch_facilitator_stats_rows(conn, *, facilitator_id)`** —
-  sessions originally facilitated by `facilitator_id` (filters on the
-  ORIGINAL `facilitator_id` column; a handoff target recorded in
-  `handoff_facilitator_id` gets no credit here).
+- **`fetch_user_stats_rows(conn, *, user_id)`** — sessions `user_id`
+  was in (a `session_participants` row) OR originally facilitated
+  (the ORIGINAL `facilitator_id` column), deduped by the WHERE. Rows
+  carry `completed_intention` only for sessions the user originally
+  facilitated (NULL otherwise), so the completion rate covers
+  facilitated sessions while sessions, minutes and streak cover
+  everything. A handoff target counts as a participant, but their
+  Reflect answer does not count toward their rate. Sessions from
+  before participant tracking have no participant rows and count only
+  for their facilitator.
 - **`fetch_guild_stats_rows(conn, *, guild_id)`** — sessions started in
   `guild_id`.
 

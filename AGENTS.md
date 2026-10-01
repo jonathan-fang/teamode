@@ -103,7 +103,7 @@ by tests directly without a live bot.
 source of truth for voice.
 
 **`app/db.py`** — SQLite schema, connection, write helpers, and the
-stats read helpers (`fetch_facilitator_stats_rows`,
+stats read helpers (`fetch_user_stats_rows`,
 `fetch_guild_stats_rows`). See `docs/sqlite-schema.md` for the schema
 reference.
 

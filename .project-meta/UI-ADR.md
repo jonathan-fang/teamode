@@ -227,9 +227,13 @@ The bot does not capture the response (`followup_note` stays NULL).
 Ephemeral embed, `STATS_TITLE` (`🍵 TeaMode stats`), accent
 `COLORS["active"]`. Two fields:
 
-- `STATS_SECTION_YOU` (`You`) — the original-facilitator credit (a
-  handoff target gets no credit; see `docs/sqlite-schema.md` §
-  `handoff_facilitator_id`).
+- `STATS_SECTION_YOU` (`You`) — counts every qualifying session you
+  were in (voice participant) or originally facilitated. Completion
+  rate comes only from sessions you originally facilitated (a handoff
+  target's Reflect answer does not count toward their rate; see
+  `docs/sqlite-schema.md` § `handoff_facilitator_id`). Sessions from
+  before participant tracking (2026-10-01) count only for their
+  facilitator.
 - `STATS_SECTION_SERVER` (`This server`).
 
 Each field has a row per `STATS_WINDOWS_DAYS` (7, 30) plus

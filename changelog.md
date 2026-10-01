@@ -11,6 +11,12 @@
   from the member cache and voice-state events, so no extra Discord API
   calls.
 
+### Changed
+
+- **`/stats` "You" counts joined sessions.** It now includes sessions
+  you joined as well as ones you facilitated; completion rate is still
+  computed only from sessions you facilitated.
+
 ### Verified
 
 - **Automatic RNG handoff verified live in Discord.** When the

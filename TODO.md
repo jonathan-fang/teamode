@@ -26,12 +26,7 @@ anonymization were also originally scoped here — see
 
 ## Next Minor
 
-- **Participant-aware `/stats`.** "You" counts sessions you were in
-  (participant rows UNION sessions you facilitated, deduped, so
-  pre-feature history survives). Open decision: completion rate — (a)
-  facilitated sessions only, (b) sessions/minutes for all joined + rate
-  from facilitated, (c) drop rate from "You". New strings need User
-  approval.
+_Empty._
 
 ---
 
@@ -131,6 +126,11 @@ until promoted.
   `sqlite3 -readonly sessions.db "SELECT * FROM session_participants ORDER BY session_id DESC LIMIT 20;"`
   — expect the first two with `joined_late=0`, the third with
   `joined_late=1`, the rejoiner still `0`, and no row for Ocha.
+- **Participant-aware `/stats` — manual Discord check postponed; test
+  in production.** A user who only joined (did not facilitate) a
+  completed session runs `/stats` → "You" shows that session and its
+  minutes with "— completed"; the facilitator's "You" completion rate
+  is unchanged.
 
 Command naming — resolved: `/teamode-clear` and `/teamode-stats` were
 shortened to `/clear` and `/stats`; `/teamode` and `/handoff` stay
