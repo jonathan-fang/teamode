@@ -31,6 +31,14 @@
   branches; the others (no session, not facilitator, target not in
   voice) remain unverified live.
 
+### Closed
+
+- **Auto-removing the "Time's up!" message — closed, already handled.**
+  The next `/teamode` in the channel deletes the previous session's
+  "Time's up!" message, and `/clear` removes any leftovers by content
+  (including after a bot restart, when the in-memory message ids are
+  gone). No timed auto-delete needed.
+
 ## v26Q3.0.0.0 — 2026-09-30
 
 Package refactor, reliability hardening, and the features that were

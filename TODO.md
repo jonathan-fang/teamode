@@ -7,6 +7,11 @@ This file is the inbox + holding pen for ideas that aren't in flight.
 The active project work is tracked in `.apm/plan.md` once Work
 Breakdown is complete — not here.
 
+Wait for a week of real-time use before acting on features, ensuring that only necessary features are added.
+There will never be a time a codebase considered nothing can be improved or change because circumstances change.
+
+Next can soonest update: 26Q4.
+
 ---
 
 ## Next Patch
@@ -90,10 +95,7 @@ _Empty._
 
 ### Shelved
 
-- **Remove the "Time's up!" message 3 minutes after session completion.**
-  Shelved (not tied to external interest — just not a priority right
-  now). Revisit on its own merits later, independent of the external-
-  interest items in `docs/external-interest-log.md`.
+_Empty._
 
 ---
 
@@ -138,8 +140,5 @@ as-is. Discoverability handled via Discord's per-app command filter
 (type the bot's name, e.g. `/ocha`, in the slash-command picker) rather
 than prefixing every command with `teamode-` — documented in README.
 
-Automatic RNG handoff — resolved: verified live in Discord 2026-10-01
-(facilitator leaves with others remaining → session reassigned);
-recorded in `changelog.md` § Unreleased.
-- [ ] Apparently ocha doesn't need manage messages to delete it's own messages, including old ones? So I could have it so that anybody can trigger it, is that desired? Minor to input in Todo md, not planning to touch it for another quarter. There will never be a time a codebase considered nothing can be improved or change because circumstances change .
+- [ ] Apparently ocha doesn't need manage messages to delete it's own messages, including old ones? So I could have it so that anybody can trigger it, is that desired?
 - [ ] minor generate art doesn't really belong in git it's a one time thing ...? Also ai art controversial atm 
