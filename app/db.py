@@ -1,6 +1,7 @@
 """SQLite schema and write/read helpers for TeaMode session state."""
 
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,20 @@ _CREATE_IDX_STARTED_AT = """
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at)
 """
 
+_CREATE_SESSION_PARTICIPANTS = """
+CREATE TABLE IF NOT EXISTS session_participants (
+    session_id  INTEGER NOT NULL REFERENCES sessions(id),
+    user_id     TEXT    NOT NULL,
+    joined_late INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, user_id)
+)
+"""
+
+_CREATE_IDX_PARTICIPANTS_USER = """
+CREATE INDEX IF NOT EXISTS idx_session_participants_user
+ON session_participants(user_id)
+"""
+
 _NON_TERMINAL_STATUSES = ("pending", "intention_set", "active", "followup")
 
 
@@ -52,6 +67,8 @@ def init_db(path: str | Path) -> sqlite3.Connection:
     conn.execute(_CREATE_SESSIONS)
     conn.execute(_CREATE_IDX_FACILITATOR)
     conn.execute(_CREATE_IDX_STARTED_AT)
+    conn.execute(_CREATE_SESSION_PARTICIPANTS)
+    conn.execute(_CREATE_IDX_PARTICIPANTS_USER)
     conn.commit()
     return conn
 
@@ -222,6 +239,44 @@ def update_cancelled(
         (ts, session_id),
     )
     conn.commit()
+
+
+def insert_session_participants(
+    conn: sqlite3.Connection,
+    *,
+    session_id: int,
+    user_ids: Iterable[str],
+    joined_late: bool,
+) -> None:
+    """INSERT OR IGNORE one row per user_id into session_participants.
+
+    An existing (session_id, user_id) row is left untouched, so the first
+    recorded joined_late value wins. No-op on empty input.
+    """
+    flag = 1 if joined_late else 0
+    rows = [(session_id, user_id, flag) for user_id in user_ids]
+    if not rows:
+        return
+    conn.executemany(
+        "INSERT OR IGNORE INTO session_participants"
+        " (session_id, user_id, joined_late) VALUES (?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+def fetch_session_participants(
+    conn: sqlite3.Connection,
+    *,
+    session_id: int,
+) -> list[tuple[str, bool]]:
+    """SELECT (user_id, joined_late) for a session, ordered by user_id."""
+    cur = conn.execute(
+        "SELECT user_id, joined_late FROM session_participants"
+        " WHERE session_id = ? ORDER BY user_id",
+        (session_id,),
+    )
+    return [(user_id, bool(late)) for user_id, late in cur.fetchall()]
 
 
 _QUALIFYING_STATUSES = ("completed", "followup_timeout")
