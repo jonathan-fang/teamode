@@ -215,6 +215,9 @@ Terminal is documented in
 sqlite3 sessions.db
 > SELECT started_at, duration_minutes, intention, completed_intention
   FROM sessions ORDER BY started_at DESC LIMIT 10;
+> SELECT s.id, s.started_at, COUNT(p.user_id) AS people
+  FROM sessions s LEFT JOIN session_participants p ON p.session_id = s.id
+  GROUP BY s.id ORDER BY s.id DESC LIMIT 10;
 ```
 
 Field-by-field schema reference: [`docs/sqlite-schema.md`](docs/sqlite-schema.md).

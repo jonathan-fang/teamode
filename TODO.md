@@ -26,7 +26,12 @@ anonymization were also originally scoped here — see
 
 ## Next Minor
 
-_Empty._
+- **Participant-aware `/stats`.** "You" counts sessions you were in
+  (participant rows UNION sessions you facilitated, deduped, so
+  pre-feature history survives). Open decision: completion rate — (a)
+  facilitated sessions only, (b) sessions/minutes for all joined + rate
+  from facilitated, (c) drop rate from "You". New strings need User
+  approval.
 
 ---
 
@@ -43,10 +48,7 @@ ships. Promote to a release-target queue when ready.
 
 ### v2 — bookkeeping
 
-- **Participant snapshot at session start.** Record who was in the
-  voice channel when the session started — useful for stats but adds
-  a Discord API call. Blocked on: participant-capture decision (see
-  `docs/external-interest-log.md` — postponed).
+_Empty._
 
 ### v1.x — code organization
 

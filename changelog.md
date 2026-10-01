@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **Participant tracking.** Each session now records which humans were
+  in the voice channel: a snapshot when the timer starts plus anyone
+  who joins voice later while the session is active, stored in the new
+  `session_participants` table (`joined_late` flags late joiners). Read
+  from the member cache and voice-state events, so no extra Discord API
+  calls.
+
 ### Verified
 
 - **Automatic RNG handoff verified live in Discord.** When the

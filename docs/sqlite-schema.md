@@ -6,9 +6,8 @@ exactly one row, written once at session start and updated as state advances
 for the look-back use case (intentions, follow-ups, completion stats) without
 introducing relational complexity prematurely.
 
-If we later track participants individually (who reacted to follow-up, who
-was in voice), promote to a second table `session_participants` keyed by
-`session_id`. Out of scope for MVP.
+Voice participants are tracked in a second table, `session_participants`;
+see [`## session_participants table`](#session_participants-table) below.
 
 ---
 
@@ -171,6 +170,45 @@ handoff occurred.
 
 ---
 
+## `session_participants` table
+
+```sql
+CREATE TABLE session_participants (
+    session_id  INTEGER NOT NULL REFERENCES sessions(id),
+    user_id     TEXT    NOT NULL,
+    joined_late INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, user_id)
+);
+
+CREATE INDEX idx_session_participants_user ON session_participants(user_id);
+```
+
+Created by `init_db`, so existing databases gain the table on next start.
+
+### `session_id`
+Foreign key to `sessions.id`.
+
+### `user_id`
+Discord user ID (snowflake) stored as TEXT, like the other ID columns.
+Bots (including Ocha) are never recorded.
+
+### `joined_late`
+`0` = the person was in the voice channel when the timer started.
+`1` = they joined the voice channel later, while the session was still
+ACTIVE.
+
+### Semantics
+- Writes use `INSERT OR IGNORE`: one row per person per session. If
+  someone leaves and rejoins, the first row is kept (so a start-of-session
+  member stays `joined_late = 0`).
+- The start snapshot is read from the member cache when the session
+  becomes ACTIVE; late joins come from voice-state events. No extra
+  Discord API calls.
+- Breaks are not sessions, so they produce no rows.
+- Joins after the timer ends (follow-up onward) are not recorded.
+
+---
+
 ## Stats read helpers
 
 `/stats` reads through two helpers in `app/db.py` rather than
@@ -194,9 +232,6 @@ completed_intention)`, aggregated in `app/stats.py` into the 7-day /
 
 ## What's intentionally **not** stored
 
-- **Participant list at start**: would require a `guild.voice_states`
-  snapshot at invocation time. Adds API call complexity for a stat we don't
-  yet need. Defer to v2.
 - **Reaction details on the follow-up**: only the facilitator's answer is
   authoritative for `completed_intention`; co-worker reactions are social
   signal, not state. If we want to count "participants who reacted",
@@ -217,6 +252,12 @@ repo root). Gitignored.
 # One-shot read of the most recent sessions.
 sqlite3 sessions.db "SELECT id, status, intention, started_at, ended_at FROM sessions ORDER BY id DESC LIMIT 5;"
 
+# Participants of the most recent sessions.
+sqlite3 -readonly sessions.db "SELECT * FROM session_participants ORDER BY session_id DESC LIMIT 20;"
+
+# People count per session.
+sqlite3 -readonly sessions.db "SELECT s.id, s.started_at, s.status, COUNT(p.user_id) AS people FROM sessions s LEFT JOIN session_participants p ON p.session_id = s.id GROUP BY s.id ORDER BY s.id DESC LIMIT 10;"
+
 # Interactive shell.
 sqlite3 sessions.db
 sqlite> .tables
@@ -227,6 +268,10 @@ sqlite> .quit
 # Read-only mode (avoids any lock contention with the running bot).
 sqlite3 -readonly sessions.db
 ```
+
+`user_id` is a Discord user ID. To match one to a person, enable
+Developer Mode in Discord, then right-click the user and choose
+Copy User ID.
 
 ### GUI options
 
