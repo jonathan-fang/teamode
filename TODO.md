@@ -26,7 +26,12 @@ anonymization were also originally scoped here — see
 
 ## Next Minor
 
-_Empty._
+- **Participant-aware `/stats`.** "You" counts sessions you were in
+  (participant rows UNION sessions you facilitated, deduped, so
+  pre-feature history survives). Open decision: completion rate — (a)
+  facilitated sessions only, (b) sessions/minutes for all joined + rate
+  from facilitated, (c) drop rate from "You". New strings need User
+  approval.
 
 ---
 
@@ -43,10 +48,7 @@ ships. Promote to a release-target queue when ready.
 
 ### v2 — bookkeeping
 
-- **Participant snapshot at session start.** Record who was in the
-  voice channel when the session started — useful for stats but adds
-  a Discord API call. Blocked on: participant-capture decision (see
-  `docs/external-interest-log.md` — postponed).
+_Empty._
 
 ### v1.x — code organization
 
@@ -121,11 +123,23 @@ until promoted.
   without Manage Messages and confirm the ephemeral refusal "You need
   the Manage Messages permission to run /clear." (other smoke
   steps passed; delete pacing via `CLEAR_DELETE_INTERVAL_SECONDS`).
+- **Participant tracking — manual Discord check postponed; test in
+  production.** Merged untested live. (1) Two humans in voice →
+  `/teamode`, pick a duration, submit an intention; (2) a third human
+  joins voice while the timer runs; (3) optionally one of the first two
+  leaves and rejoins; (4) run
+  `sqlite3 -readonly sessions.db "SELECT * FROM session_participants ORDER BY session_id DESC LIMIT 20;"`
+  — expect the first two with `joined_late=0`, the third with
+  `joined_late=1`, the rejoiner still `0`, and no row for Ocha.
 
 Command naming — resolved: `/teamode-clear` and `/teamode-stats` were
 shortened to `/clear` and `/stats`; `/teamode` and `/handoff` stay
 as-is. Discoverability handled via Discord's per-app command filter
 (type the bot's name, e.g. `/ocha`, in the slash-command picker) rather
 than prefixing every command with `teamode-` — documented in README.
+
+Automatic RNG handoff — resolved: verified live in Discord 2026-10-01
+(facilitator leaves with others remaining → session reassigned);
+recorded in `changelog.md` § Unreleased.
 - [ ] Apparently ocha doesn't need manage messages to delete it's own messages, including old ones? So I could have it so that anybody can trigger it, is that desired? Minor to input in Todo md, not planning to touch it for another quarter. There will never be a time a codebase considered nothing can be improved or change because circumstances change .
 - [ ] minor generate art doesn't really belong in git it's a one time thing ...? Also ai art controversial atm 

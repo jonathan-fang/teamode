@@ -584,3 +584,63 @@ async def test_second_submit_for_non_pending_session_is_refused(
     session = registry.get(session_id)
     assert session is not None
     assert session.intention == "already submitted"
+
+
+@pytest.mark.asyncio
+async def test_modal_submit_snapshots_participants(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+    conn: sqlite3.Connection,
+) -> None:
+    """on_submit records non-bot, non-Ocha voice members as joined_late=0."""
+    session_id = _seed_session_with_duration(registry)
+
+    def _member(uid: int, *, is_bot: bool = False) -> MagicMock:
+        m = MagicMock(spec=discord.Member)
+        m.id = uid
+        m.bot = is_bot
+        m.mention = f"<@{uid}>"
+        return m
+
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_voice_channel.members = [
+        _member(11),
+        _member(12),
+        _member(13, is_bot=True),
+        _member(999),
+    ]
+    fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
+
+    fake_client = MagicMock(spec=discord.Client)
+    fake_client.user = MagicMock()
+    fake_client.user.id = 999
+    bot.client = fake_client  # type: ignore[assignment]
+
+    modal = IntentionModal(
+        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
+    )
+    text_input = cast(
+        discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
+    )
+    text_input._value = "focus"
+
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+    inter.channel = fake_voice_channel
+
+    def _close_coro(coro: object, **_kwargs: object) -> None:
+        if hasattr(coro, "close"):
+            coro.close()  # type: ignore[union-attr]
+
+    with (
+        patch("app.discord_bot.views.voice.connect", return_value=AsyncMock()),
+        patch("app.discord_bot.tasks.asyncio.create_task", side_effect=_close_coro),
+    ):
+        await modal.on_submit(inter)
+
+    rows = conn.execute(
+        "SELECT user_id, joined_late FROM session_participants"
+        " WHERE session_id = ? ORDER BY user_id",
+        (session_id,),
+    ).fetchall()
+    assert rows == [("11", 0), ("12", 0)]

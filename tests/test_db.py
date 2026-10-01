@@ -3,7 +3,9 @@
 import sqlite3
 
 from app.db import (
+    fetch_session_participants,
     init_db,
+    insert_session_participants,
     insert_pending_session,
     update_cancelled,
     update_completed,
@@ -325,3 +327,60 @@ def test_update_cancelled_defaults_to_now(conn: sqlite3.Connection) -> None:
     row = _fetch(conn, session_id)
     assert row["ended_at"] is not None
     assert row["status"] == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# session_participants
+# ---------------------------------------------------------------------------
+
+
+def test_session_participants_columns(conn: sqlite3.Connection) -> None:
+    """The table exists with the expected columns."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(session_participants)")}
+    assert cols == {"session_id", "user_id", "joined_late"}
+
+
+def test_session_participants_round_trip(conn: sqlite3.Connection) -> None:
+    sid = _insert_base(conn)
+    insert_session_participants(
+        conn, session_id=sid, user_ids=["30", "20"], joined_late=False
+    )
+    insert_session_participants(conn, session_id=sid, user_ids=["40"], joined_late=True)
+    assert fetch_session_participants(conn, session_id=sid) == [
+        ("20", False),
+        ("30", False),
+        ("40", True),
+    ]
+
+
+def test_session_participants_duplicate_keeps_first(conn: sqlite3.Connection) -> None:
+    sid = _insert_base(conn)
+    insert_session_participants(
+        conn, session_id=sid, user_ids=["20"], joined_late=False
+    )
+    insert_session_participants(conn, session_id=sid, user_ids=["20"], joined_late=True)
+    assert fetch_session_participants(conn, session_id=sid) == [("20", False)]
+
+
+def test_session_participants_empty_is_noop(conn: sqlite3.Connection) -> None:
+    sid = _insert_base(conn)
+    insert_session_participants(conn, session_id=sid, user_ids=[], joined_late=False)
+    assert fetch_session_participants(conn, session_id=sid) == []
+
+
+def test_session_participants_init_idempotent(conn: sqlite3.Connection) -> None:
+    """Re-running init_db against a file DB keeps participant rows."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "s.db"
+        c1 = init_db(path)
+        sid = _insert_base(c1)
+        insert_session_participants(
+            c1, session_id=sid, user_ids=["1"], joined_late=True
+        )
+        c1.close()
+        c2 = init_db(path)
+        assert fetch_session_participants(c2, session_id=sid) == [("1", True)]
+        c2.close()

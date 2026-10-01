@@ -234,6 +234,26 @@ class SessionRegistry:
         )
         session.state = SessionState.ACTIVE
 
+    def record_participants(
+        self,
+        *,
+        session_id: int,
+        user_ids: list[str],
+        joined_late: bool = False,
+    ) -> None:
+        """Record humans present in voice for a session.
+
+        Valid state: ACTIVE. Existing rows are kept (first value wins).
+        """
+        session = self._get_or_raise(session_id)
+        self._require_state(session, SessionState.ACTIVE)
+        db.insert_session_participants(
+            self._conn,
+            session_id=session_id,
+            user_ids=user_ids,
+            joined_late=joined_late,
+        )
+
     def mark_followup(self, *, session_id: int) -> None:
         """Timer reached zero — advance state to FOLLOWUP.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import sqlite3
 from typing import TYPE_CHECKING
 
 import discord
@@ -546,6 +547,25 @@ class LifecycleMixin:
             joined_session = self._registry.find_active_in_voice_channel(
                 str(after.channel.id)
             )
+            join_bot_id = self.client.user.id if self.client.user else None
+            if (
+                joined_session is not None
+                and joined_session.state is SessionState.ACTIVE
+                and not member.bot
+                and member.id != join_bot_id
+            ):
+                # Late joiner — bookkeeping only, never breaks the flow.
+                try:
+                    self._registry.record_participants(
+                        session_id=joined_session.session_id,
+                        user_ids=[str(member.id)],
+                        joined_late=True,
+                    )
+                except sqlite3.Error:
+                    logger.exception(
+                        "Failed to record late joiner for session %s",
+                        joined_session.session_id,
+                    )
             if (
                 joined_session is not None
                 and str(member.id) == joined_session.facilitator_id

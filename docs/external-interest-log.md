@@ -38,7 +38,10 @@ that changes.
   Intent + a participants table; (2) per-user "Share my intention" modal
   button — no extra intent needed, cleaner privacy story. Both blocked on
   the same question: is look-back participant data actually useful with
-  more than one user in the loop.
+  more than one user in the loop. Decided 2026-10-01: build it.
+  Voice-presence capture (snapshot at start + late joins) is implemented
+  in `session_participants`; the two intention-capture options remain
+  unbuilt.
 
 ## Donations & legal requirements — resolved, filed for later
 

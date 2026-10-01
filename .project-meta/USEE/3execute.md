@@ -18,6 +18,10 @@ Implementation Phase begins._
 
 _Empty — repo is greenfield as of 2026-05-09._
 
+- 2026-10-01 — `feat/session-participants`: voice-presence participant
+  tracking (`session_participants`: snapshot at start + late joins);
+  awaiting manual Discord smoke test.
+
 ## Next session targets
 
 The Spec / Plan in `.apm/` is authoritative. Strategic sketch from

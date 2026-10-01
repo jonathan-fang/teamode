@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Participant tracking.** Each session now records which humans were
+  in the voice channel: a snapshot when the timer starts plus anyone
+  who joins voice later while the session is active, stored in the new
+  `session_participants` table (`joined_late` flags late joiners). Read
+  from the member cache and voice-state events, so no extra Discord API
+  calls.
+
+### Verified
+
+- **Automatic RNG handoff verified live in Discord.** When the
+  facilitator leaves with others remaining, the session is reassigned
+  to a remaining member. This was one of the eight live paths listed
+  as unverified in v26Q3.0.0.0; seven remain.
+- **`/handoff` refusals for Ocha and self verified live in Discord.**
+  Naming the bot as the target returns the ephemeral "Pick a human
+  voice-channel member." refusal; the facilitator naming themselves
+  returns "You are already the facilitator." In both cases the
+  facilitator is unchanged. This covers two of the `/handoff` refusal
+  branches; the others (no session, not facilitator, target not in
+  voice) remain unverified live.
+
 ## v26Q3.0.0.0 — 2026-09-30
 
 Package refactor, reliability hardening, and the features that were
