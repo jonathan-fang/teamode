@@ -17,7 +17,7 @@ from app.constants import (
     STATS_SECTION_YOU,
     STATS_TITLE,
 )
-from app.db import fetch_facilitator_stats_rows, fetch_guild_stats_rows
+from app.db import fetch_user_stats_rows, fetch_guild_stats_rows
 from app.discord_bot.views import COLORS
 from app.stats import (
     compute_stats_summary,
@@ -51,14 +51,12 @@ class StatsMixin:
             await interaction.response.send_message(MSG_WRONG_CHANNEL, ephemeral=True)
             return
 
-        facilitator_id = str(interaction.user.id)
+        user_id = str(interaction.user.id)
         guild_id = str(interaction.guild_id)
         now = datetime.now(timezone.utc)
         tz = TEAMODE_TIMEZONE
 
-        you_rows = fetch_facilitator_stats_rows(
-            self._conn, facilitator_id=facilitator_id
-        )
+        you_rows = fetch_user_stats_rows(self._conn, user_id=user_id)
         server_rows = fetch_guild_stats_rows(self._conn, guild_id=guild_id)
 
         you_summary = compute_stats_summary(you_rows, now=now)

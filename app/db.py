@@ -300,26 +300,42 @@ def _row_to_stats_row(row: tuple[str, int | None, int | None]) -> StatsSessionRo
     )
 
 
-def fetch_facilitator_stats_rows(
+def fetch_user_stats_rows(
     conn: sqlite3.Connection,
     *,
-    facilitator_id: str,
+    user_id: str,
 ) -> list[StatsSessionRow]:
-    """Return qualifying sessions originally facilitated by *facilitator_id*.
+    """Return qualifying sessions *user_id* was in or originally facilitated.
 
     Qualifying means ``status`` reached follow-up
-    (``'completed'`` or ``'followup_timeout'``). Filters on the ORIGINAL
-    ``facilitator_id`` — a handoff target recorded in
-    ``handoff_facilitator_id`` gets no credit here.
+    (``'completed'`` or ``'followup_timeout'``). A session matches when
+    the user has a ``session_participants`` row OR is the ORIGINAL
+    ``facilitator_id``; the single WHERE dedupes (no UNION), so a user who
+    is both gets one row.
+
+    ``completed_intention`` is returned only for sessions the user
+    originally facilitated and is NULL otherwise, so the completion rate
+    covers facilitated sessions only while sessions and minutes cover
+    everything. A handoff target counts as a participant, but their
+    Reflect answer does not count toward their rate (original-facilitator
+    rule, unchanged). Sessions from before participant tracking have no
+    participant rows and so count only for their facilitator.
     """
-    placeholders = ",".join("?" * len(_QUALIFYING_STATUSES))
+    status_params = {f"s{i}": s for i, s in enumerate(_QUALIFYING_STATUSES)}
+    placeholders = ",".join(f":{name}" for name in status_params)
     cur = conn.execute(
         f"""
-        SELECT started_at, duration_minutes, completed_intention
+        SELECT started_at, duration_minutes,
+               CASE WHEN facilitator_id = :uid THEN completed_intention END
         FROM sessions
-        WHERE facilitator_id = ? AND status IN ({placeholders})
+        WHERE status IN ({placeholders})
+          AND (facilitator_id = :uid
+               OR id IN (
+                   SELECT session_id FROM session_participants
+                   WHERE user_id = :uid
+               ))
         """,  # noqa: S608
-        (facilitator_id, *_QUALIFYING_STATUSES),
+        {"uid": user_id, **status_params},
     )
     return [_row_to_stats_row(row) for row in cur.fetchall()]
 
