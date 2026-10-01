@@ -11,6 +11,12 @@
   from the member cache and voice-state events, so no extra Discord API
   calls.
 
+### Changed
+
+- **`/stats` "You" counts joined sessions.** It now includes sessions
+  you joined as well as ones you facilitated; completion rate is still
+  computed only from sessions you facilitated.
+
 ### Verified
 
 - **Automatic RNG handoff verified live in Discord.** When the
@@ -24,6 +30,14 @@
   facilitator is unchanged. This covers two of the `/handoff` refusal
   branches; the others (no session, not facilitator, target not in
   voice) remain unverified live.
+
+### Closed
+
+- **Auto-removing the "Time's up!" message — closed, already handled.**
+  The next `/teamode` in the channel deletes the previous session's
+  "Time's up!" message, and `/clear` removes any leftovers by content
+  (including after a bot restart, when the in-memory message ids are
+  gone). No timed auto-delete needed.
 
 ## v26Q3.0.0.0 — 2026-09-30
 

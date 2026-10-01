@@ -4,7 +4,8 @@ Covers: only completed/followup_timeout rows count, 7d/30d/all-time window
 filtering, completion rate (undefined when no ✅/⛔ answers), singular
 sessions/streak copy, streak hidden at 0, streak counts consecutive local
 days (including a UTC-midnight-crossing case) ending today or yesterday,
-"You" uses the original facilitator_id (never handoff_facilitator_id),
+"You" = sessions the user joined or originally facilitated (never
+handoff_facilitator_id credit for rate; rate only from facilitated),
 "This server" filters by guild_id, empty data renders STATS_EMPTY, and the
 command responds ephemerally with a STATS_TITLE embed.
 """
@@ -32,9 +33,10 @@ from app.constants import (
     STATS_TITLE,
 )
 from app.db import (
-    fetch_facilitator_stats_rows,
+    fetch_user_stats_rows,
     fetch_guild_stats_rows,
     init_db,
+    insert_session_participants,
     insert_pending_session,
     update_completed,
     update_duration,
@@ -141,7 +143,7 @@ def _iso(dt: datetime) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_facilitator_rows_only_qualifying_statuses(
+def test_fetch_user_rows_only_qualifying_statuses(
     conn: sqlite3.Connection,
 ) -> None:
     _seed(conn, facilitator_id="1", status="completed", started_at=_iso(NOW))
@@ -151,11 +153,11 @@ def test_fetch_facilitator_rows_only_qualifying_statuses(
     _seed(conn, facilitator_id="1", status="active", started_at=_iso(NOW))
     _seed(conn, facilitator_id="1", status="crashed", started_at=_iso(NOW))
 
-    rows = fetch_facilitator_stats_rows(conn, facilitator_id="1")
+    rows = fetch_user_stats_rows(conn, user_id="1")
     assert len(rows) == 2
 
 
-def test_fetch_facilitator_rows_use_original_facilitator_not_handoff(
+def test_fetch_user_rows_use_original_facilitator_not_handoff(
     conn: sqlite3.Connection,
 ) -> None:
     _seed(
@@ -166,8 +168,121 @@ def test_fetch_facilitator_rows_use_original_facilitator_not_handoff(
         handoff_facilitator_id="2",
     )
 
-    assert len(fetch_facilitator_stats_rows(conn, facilitator_id="1")) == 1
-    assert len(fetch_facilitator_stats_rows(conn, facilitator_id="2")) == 0
+    assert len(fetch_user_stats_rows(conn, user_id="1")) == 1
+    assert len(fetch_user_stats_rows(conn, user_id="2")) == 0
+
+
+def _join(conn: sqlite3.Connection, session_id: int, user_id: str) -> None:
+    insert_session_participants(
+        conn, session_id=session_id, user_ids=[user_id], joined_late=False
+    )
+
+
+def test_fetch_user_rows_joined_only_has_null_intention(
+    conn: sqlite3.Connection,
+) -> None:
+    sid = _seed(
+        conn,
+        facilitator_id="1",
+        status="completed",
+        started_at=_iso(NOW),
+        completed_intention=1,
+    )
+    _join(conn, sid, "9")
+
+    rows = fetch_user_stats_rows(conn, user_id="9")
+    assert len(rows) == 1
+    assert rows[0].completed_intention is None
+    assert rows[0].duration_minutes == 25
+
+
+def test_fetch_user_rows_facilitator_and_participant_deduped(
+    conn: sqlite3.Connection,
+) -> None:
+    sid = _seed(
+        conn,
+        facilitator_id="1",
+        status="completed",
+        started_at=_iso(NOW),
+        completed_intention=1,
+    )
+    _join(conn, sid, "1")
+
+    rows = fetch_user_stats_rows(conn, user_id="1")
+    assert len(rows) == 1
+    assert rows[0].completed_intention == 1
+
+
+def test_fetch_user_rows_pre_tracking_facilitated_session_returned(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed(conn, facilitator_id="1", status="completed", started_at=_iso(NOW))
+
+    rows = fetch_user_stats_rows(conn, user_id="1")
+    assert len(rows) == 1
+    assert rows[0].completed_intention == 1
+
+
+@pytest.mark.parametrize("status", ["active", "cancelled"])
+def test_fetch_user_rows_excludes_non_qualifying_participation(
+    conn: sqlite3.Connection, status: str
+) -> None:
+    sid = _seed(conn, facilitator_id="1", status=status, started_at=_iso(NOW))
+    _join(conn, sid, "9")
+
+    assert fetch_user_stats_rows(conn, user_id="9") == []
+
+
+def test_fetch_user_rows_other_users_participation_does_not_leak(
+    conn: sqlite3.Connection,
+) -> None:
+    sid = _seed(conn, facilitator_id="1", status="completed", started_at=_iso(NOW))
+    _join(conn, sid, "8")
+
+    assert fetch_user_stats_rows(conn, user_id="9") == []
+
+
+def test_summary_mix_counts_joined_but_rate_only_from_facilitated(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed(
+        conn,
+        facilitator_id="9",
+        status="completed",
+        started_at=_iso(NOW),
+        completed_intention=1,
+    )
+    joined = _seed(
+        conn,
+        facilitator_id="1",
+        status="completed",
+        started_at=_iso(NOW),
+        completed_intention=0,
+    )
+    _join(conn, joined, "9")
+
+    rows = fetch_user_stats_rows(conn, user_id="9")
+    _, _, all_time = compute_stats_summary(rows, now=NOW)
+    assert all_time.sessions == 2
+    assert all_time.minutes == 50
+    assert all_time.rate == 100
+
+
+def test_streak_counts_day_with_only_joined_session(
+    conn: sqlite3.Connection,
+) -> None:
+    now = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)
+    _seed(
+        conn,
+        facilitator_id="9",
+        status="completed",
+        started_at=_iso(now - timedelta(days=1)),
+    )
+    joined = _seed(conn, facilitator_id="1", status="completed", started_at=_iso(now))
+    _join(conn, joined, "9")
+
+    rows = fetch_user_stats_rows(conn, user_id="9")
+    assert compute_streak(rows, now=now, tz=ZoneInfo("UTC")) == 2
 
 
 def test_fetch_guild_rows_filters_by_guild(conn: sqlite3.Connection) -> None:
@@ -188,7 +303,7 @@ def test_windows_filter_by_started_at(conn: sqlite3.Connection) -> None:
     _seed(conn, status="completed", started_at=_iso(NOW - timedelta(days=10)))
     _seed(conn, status="completed", started_at=_iso(NOW - timedelta(days=40)))
 
-    rows = fetch_facilitator_stats_rows(conn, facilitator_id="222")
+    rows = fetch_user_stats_rows(conn, user_id="222")
     seven, thirty, all_time = compute_stats_summary(rows, now=NOW)
 
     assert seven.sessions == 1
@@ -203,7 +318,7 @@ def test_focus_minutes_sum_treats_null_as_zero(conn: sqlite3.Connection) -> None
         started_at=_iso(NOW),
         duration_minutes=None,
     )
-    rows = fetch_facilitator_stats_rows(conn, facilitator_id="222")
+    rows = fetch_user_stats_rows(conn, user_id="222")
     _, _, all_time = compute_stats_summary(rows, now=NOW)
     assert all_time.minutes == 0
 
@@ -213,7 +328,7 @@ def test_completion_rate_is_yes_over_yes_plus_no(conn: sqlite3.Connection) -> No
     _seed(conn, status="completed", started_at=_iso(NOW), completed_intention=1)
     _seed(conn, status="completed", started_at=_iso(NOW), completed_intention=0)
 
-    rows = fetch_facilitator_stats_rows(conn, facilitator_id="222")
+    rows = fetch_user_stats_rows(conn, user_id="222")
     _, _, all_time = compute_stats_summary(rows, now=NOW)
     assert all_time.rate == 67  # round(2/3 * 100)
 
@@ -223,7 +338,7 @@ def test_completion_rate_undefined_renders_no_rate_copy(
 ) -> None:
     _seed(conn, status="followup_timeout", started_at=_iso(NOW))
 
-    rows = fetch_facilitator_stats_rows(conn, facilitator_id="222")
+    rows = fetch_user_stats_rows(conn, user_id="222")
     _, _, all_time = compute_stats_summary(rows, now=NOW)
     assert all_time.rate is None
     value = render_row_value(all_time)
@@ -269,7 +384,7 @@ def test_streak_consecutive_days_ending_today(conn: sqlite3.Connection) -> None:
     _seed(conn, status="completed", started_at=_iso(now - timedelta(days=1)))
     _seed(conn, status="completed", started_at=_iso(now - timedelta(days=2)))
 
-    rows = fetch_facilitator_stats_rows(conn, facilitator_id="222")
+    rows = fetch_user_stats_rows(conn, user_id="222")
     assert compute_streak(rows, now=now, tz=tz) == 3
 
 
@@ -278,7 +393,7 @@ def test_streak_zero_when_gap_before_yesterday(conn: sqlite3.Connection) -> None
     now = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)
     _seed(conn, status="completed", started_at=_iso(now - timedelta(days=3)))
 
-    rows = fetch_facilitator_stats_rows(conn, facilitator_id="222")
+    rows = fetch_user_stats_rows(conn, user_id="222")
     assert compute_streak(rows, now=now, tz=tz) == 0
 
 
@@ -296,7 +411,7 @@ def test_streak_crosses_utc_midnight_but_not_local_midnight(
 
     _seed(conn, status="completed", started_at=_iso(session_utc))
 
-    rows = fetch_facilitator_stats_rows(conn, facilitator_id="222")
+    rows = fetch_user_stats_rows(conn, user_id="222")
     # Local "today" (2026-09-29) has a qualifying session -> streak of 1.
     assert compute_streak(rows, now=now_utc, tz=tz) == 1
 
@@ -307,7 +422,7 @@ def test_streak_crosses_utc_midnight_but_not_local_midnight(
 
 
 def test_empty_summary_has_zero_sessions(conn: sqlite3.Connection) -> None:
-    rows = fetch_facilitator_stats_rows(conn, facilitator_id="nobody")
+    rows = fetch_user_stats_rows(conn, user_id="nobody")
     _, _, all_time = compute_stats_summary(rows, now=NOW)
     assert all_time.sessions == 0
 
@@ -403,3 +518,27 @@ async def test_command_has_you_and_server_sections(
     assert field_names == [STATS_SECTION_YOU, STATS_SECTION_SERVER]
     for f in embed.fields:
         assert f.inline is False
+
+
+@pytest.mark.asyncio
+async def test_command_joined_only_user_sees_you_rows_without_rate(
+    bot: TeaModeBot, conn: sqlite3.Connection
+) -> None:
+    sid = _seed(
+        conn,
+        guild_id="222",
+        facilitator_id="1",
+        status="completed",
+        started_at=_iso(datetime.now(timezone.utc)),
+    )
+    _join(conn, sid, "111")
+    inter = _make_stats_interaction(guild_id=222, user_id=111)
+
+    await bot._handle_stats(inter)
+
+    embed: discord.Embed = inter.response.send_message.call_args.kwargs["embed"]
+    you = next(f for f in embed.fields if f.name == STATS_SECTION_YOU)
+    assert STATS_ROW_VALUE_NO_RATE.format(sessions="1 session", minutes=25) in (
+        you.value or ""
+    )
+    assert "%" not in (you.value or "")

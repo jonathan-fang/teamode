@@ -7,6 +7,11 @@ This file is the inbox + holding pen for ideas that aren't in flight.
 The active project work is tracked in `.apm/plan.md` once Work
 Breakdown is complete — not here.
 
+Wait for a week of real-time use before acting on features, ensuring that only necessary features are added.
+There will never be a time a codebase considered nothing can be improved or change because circumstances change.
+
+Next can soonest update: 26Q4.
+
 ---
 
 ## Next Patch
@@ -26,12 +31,7 @@ anonymization were also originally scoped here — see
 
 ## Next Minor
 
-- **Participant-aware `/stats`.** "You" counts sessions you were in
-  (participant rows UNION sessions you facilitated, deduped, so
-  pre-feature history survives). Open decision: completion rate — (a)
-  facilitated sessions only, (b) sessions/minutes for all joined + rate
-  from facilitated, (c) drop rate from "You". New strings need User
-  approval.
+_Empty._
 
 ---
 
@@ -95,10 +95,7 @@ _Empty._
 
 ### Shelved
 
-- **Remove the "Time's up!" message 3 minutes after session completion.**
-  Shelved (not tied to external interest — just not a priority right
-  now). Revisit on its own merits later, independent of the external-
-  interest items in `docs/external-interest-log.md`.
+_Empty._
 
 ---
 
@@ -131,15 +128,14 @@ until promoted.
   `sqlite3 -readonly sessions.db "SELECT * FROM session_participants ORDER BY session_id DESC LIMIT 20;"`
   — expect the first two with `joined_late=0`, the third with
   `joined_late=1`, the rejoiner still `0`, and no row for Ocha.
+- **Participant-aware `/stats` — manual Discord check postponed; test
+  in production.** A user who only joined (did not facilitate) a
+  completed session runs `/stats` → "You" shows that session and its
+  minutes with "— completed"; the facilitator's "You" completion rate
+  is unchanged.
 
 Command naming — resolved: `/teamode-clear` and `/teamode-stats` were
 shortened to `/clear` and `/stats`; `/teamode` and `/handoff` stay
 as-is. Discoverability handled via Discord's per-app command filter
 (type the bot's name, e.g. `/ocha`, in the slash-command picker) rather
 than prefixing every command with `teamode-` — documented in README.
-
-Automatic RNG handoff — resolved: verified live in Discord 2026-10-01
-(facilitator leaves with others remaining → session reassigned);
-recorded in `changelog.md` § Unreleased.
-- [ ] Apparently ocha doesn't need manage messages to delete it's own messages, including old ones? So I could have it so that anybody can trigger it, is that desired? Minor to input in Todo md, not planning to touch it for another quarter. There will never be a time a codebase considered nothing can be improved or change because circumstances change .
-- [ ] minor generate art doesn't really belong in git it's a one time thing ...? Also ai art controversial atm 
