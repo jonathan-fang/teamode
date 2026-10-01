@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Protocol
@@ -443,6 +444,22 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             m for m in voice_channel.members if not m.bot and m.id != bot_id
         ]
         mention_line = " ".join(m.mention for m in mention_members)
+
+        # Bookkeeping only: a DB failure must never break the session.
+        try:
+            self._bot._registry.record_participants(
+                session_id=self._session_id,
+                user_ids=[str(m.id) for m in mention_members],
+            )
+            logger.info(
+                "Session %s participants recorded: %d",
+                self._session_id,
+                len(mention_members),
+            )
+        except sqlite3.Error:
+            logger.exception(
+                "Failed to record participants for session %s", self._session_id
+            )
 
         initial_content, initial_embed = _build_timer_message(
             intention=session.intention,

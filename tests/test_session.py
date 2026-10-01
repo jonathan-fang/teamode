@@ -368,3 +368,32 @@ def test_set_duration_unknown_id_raises(registry: SessionRegistry) -> None:
     """Transitions on an unknown session_id raise ValueError."""
     with pytest.raises(ValueError, match="No session with id="):
         registry.set_duration(session_id=9999, duration_minutes=25)
+
+
+# ---------------------------------------------------------------------------
+# record_participants
+# ---------------------------------------------------------------------------
+
+
+def test_record_participants_on_active(
+    registry: SessionRegistry, conn: sqlite3.Connection
+) -> None:
+    session = _make_session(registry)
+    sid = session.session_id
+    registry.set_duration(session_id=sid, duration_minutes=25)
+    registry.set_intention(session_id=sid, intention="x")
+    registry.mark_active(session_id=sid)
+    registry.record_participants(session_id=sid, user_ids=["1", "2"])
+    registry.record_participants(session_id=sid, user_ids=["3"], joined_late=True)
+    rows = conn.execute(
+        "SELECT user_id, joined_late FROM session_participants"
+        " WHERE session_id = ? ORDER BY user_id",
+        (sid,),
+    ).fetchall()
+    assert rows == [("1", 0), ("2", 0), ("3", 1)]
+
+
+def test_record_participants_from_pending_raises(registry: SessionRegistry) -> None:
+    session = _make_session(registry)
+    with pytest.raises(InvalidTransition):
+        registry.record_participants(session_id=session.session_id, user_ids=["1"])

@@ -481,3 +481,87 @@ async def test_double_arm_protection(
         await existing_task
     except asyncio.CancelledError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Participant tracking on join
+# ---------------------------------------------------------------------------
+
+
+def _participants(conn: sqlite3.Connection, sid: int) -> list[tuple[str, int]]:
+    return conn.execute(
+        "SELECT user_id, joined_late FROM session_participants"
+        " WHERE session_id = ? ORDER BY user_id",
+        (sid,),
+    ).fetchall()
+
+
+async def _join(bot: TeaModeBot, member: MagicMock, channel_id: int = 444) -> None:
+    vc = _make_voice_channel(channel_id, [member])
+    await bot.on_voice_state_update(
+        member, _make_voice_state(None), _make_voice_state(vc)
+    )
+
+
+@pytest.mark.asyncio
+async def test_late_join_during_active_recorded(
+    bot: TeaModeBot, registry: SessionRegistry, conn: sqlite3.Connection
+) -> None:
+    sid = _seed_active_session(registry)
+    _install_fake_client_user(bot, user_id=999)
+    await _join(bot, _make_member(222))
+    assert _participants(conn, sid) == [("222", 1)]
+
+
+@pytest.mark.asyncio
+async def test_join_during_intention_set_not_recorded(
+    bot: TeaModeBot, registry: SessionRegistry, conn: sqlite3.Connection
+) -> None:
+    session = registry.create_pending_session(
+        guild_id="222",
+        text_channel_id="333",
+        voice_channel_id="444",
+        facilitator_id="111",
+    )
+    registry.set_duration(session_id=session.session_id, duration_minutes=25)
+    registry.set_intention(session_id=session.session_id, intention="x")
+    _install_fake_client_user(bot, user_id=999)
+    await _join(bot, _make_member(222))
+    assert _participants(conn, session.session_id) == []
+
+
+@pytest.mark.asyncio
+async def test_bot_join_not_recorded(
+    bot: TeaModeBot, registry: SessionRegistry, conn: sqlite3.Connection
+) -> None:
+    sid = _seed_active_session(registry)
+    _install_fake_client_user(bot, user_id=999)
+    await _join(bot, _make_member(333, is_bot=True))
+    await _join(bot, _make_member(999))
+    assert _participants(conn, sid) == []
+
+
+@pytest.mark.asyncio
+async def test_snapshot_member_rejoin_stays_not_late(
+    bot: TeaModeBot, registry: SessionRegistry, conn: sqlite3.Connection
+) -> None:
+    sid = _seed_active_session(registry)
+    registry.record_participants(session_id=sid, user_ids=["222"])
+    _install_fake_client_user(bot, user_id=999)
+    await _join(bot, _make_member(222))
+    assert _participants(conn, sid) == [("222", 0)]
+
+
+@pytest.mark.asyncio
+async def test_facilitator_rejoin_records_and_still_cancels_watchdog(
+    bot: TeaModeBot, registry: SessionRegistry, conn: sqlite3.Connection
+) -> None:
+    sid = _seed_active_session(registry)
+    grace_task = asyncio.create_task(asyncio.sleep(60))
+    bot._solo_grace_tasks[sid] = grace_task
+    _install_fake_client_user(bot, user_id=999)
+    await _join(bot, _make_member(111))
+    await asyncio.sleep(0)
+    assert grace_task.cancelled()
+    assert sid not in bot._solo_grace_tasks
+    assert _participants(conn, sid) == [("111", 1)]
