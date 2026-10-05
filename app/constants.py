@@ -19,7 +19,7 @@ from __future__ import annotations
 # Tunables
 # ---------------------------------------------------------------------------
 
-DURATIONS_MINUTES: tuple[int, ...] = (5, 10, 25, 50)  # 2 only allows int # smoke
+DURATIONS_MINUTES: tuple[int, ...] = (5, 10, 25, 30, 50)  # 2 only allows int # smoke # 5, 10, 25, 50 what about like done by certain time? like 10:40am?
 
 RATE_LIMIT_WINDOW_SECONDS = 300
 RATE_LIMIT_ALLOWANCE = 3
