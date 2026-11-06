@@ -35,6 +35,7 @@ EXPECTED_COLUMNS = {
     "followup_note",
     "status",
     "handoff_facilitator_id",
+    "mode",
 }
 
 

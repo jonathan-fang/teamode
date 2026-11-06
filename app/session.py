@@ -23,6 +23,19 @@ class SessionState(str, enum.Enum):
     CRASHED = "crashed"
 
 
+class SessionMode(str, enum.Enum):
+    """How a session is run — values match the SQLite ``mode`` column.
+
+    ``VOICE`` is the normal ``/teamode`` session: Ocha joins the voice
+    channel and plays the chimes there. ``GROOVE`` is a ``/groove`` session
+    run from any text channel: no voice connection, chimes play on the host
+    machine (see ``app.local_audio``).
+    """
+
+    VOICE = "voice"
+    GROOVE = "groove"
+
+
 _TERMINAL: frozenset[SessionState] = frozenset(
     {
         SessionState.COMPLETED,
@@ -54,6 +67,7 @@ class Session:
     duration_minutes: int | None = field(default=None)
     intention: str | None = field(default=None)
     handoff_facilitator_id: str | None = field(default=None)
+    mode: SessionMode = field(default=SessionMode.VOICE)
 
 
 class SessionRegistry:
@@ -109,8 +123,11 @@ class SessionRegistry:
 
         "In-progress" means state INTENTION_SET or ACTIVE. PENDING is before
         voice join; FOLLOWUP and terminal states are after the session ended.
+        Groove sessions never match — they have no voice channel.
         """
         for session in self._by_id.values():
+            if session.mode != SessionMode.VOICE:
+                continue
             if session.voice_channel_id == voice_channel_id and session.state in (
                 SessionState.INTENTION_SET,
                 SessionState.ACTIVE,
@@ -156,8 +173,12 @@ class SessionRegistry:
         text_channel_id: str,
         voice_channel_id: str,
         facilitator_id: str,
+        mode: SessionMode = SessionMode.VOICE,
     ) -> Session:
         """Create a new session in PENDING state for the given text channel.
+
+        A Groove session has no voice channel; callers pass the text
+        channel id as *voice_channel_id* (the column is NOT NULL).
 
         Raises ``InvalidTransition`` if a non-terminal session already exists
         in *text_channel_id* — one active session per channel is a hard
@@ -177,6 +198,7 @@ class SessionRegistry:
             text_channel_id=text_channel_id,
             voice_channel_id=voice_channel_id,
             facilitator_id=facilitator_id,
+            mode=mode.value,
         )
         session = Session(
             session_id=row_id,
@@ -185,6 +207,7 @@ class SessionRegistry:
             voice_channel_id=voice_channel_id,
             facilitator_id=facilitator_id,
             state=SessionState.PENDING,
+            mode=mode,
         )
         self._by_id[row_id] = session
         self._by_text_channel[text_channel_id] = row_id

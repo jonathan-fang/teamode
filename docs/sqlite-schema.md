@@ -27,7 +27,8 @@ CREATE TABLE sessions (
     completed_intention  INTEGER,
     followup_note        TEXT,
     status               TEXT    NOT NULL,
-    handoff_facilitator_id TEXT
+    handoff_facilitator_id TEXT,
+    mode                 TEXT    NOT NULL DEFAULT 'voice'
 );
 
 CREATE INDEX idx_sessions_facilitator ON sessions(facilitator_id);
@@ -167,6 +168,18 @@ handoff occurred.
 - **Reason to store**: lets the look-back stats distinguish "ran a full
   session" from "took over a session" without altering the original
   `facilitator_id` field.
+
+### `mode`
+How the session was run: `voice` (`/teamode` — Ocha joins the voice
+channel) or `groove` (`/groove` — any text channel, no voice connection,
+chimes played on the host machine). A Groove session stores its text
+channel id in `voice_channel_id`, since that column is NOT NULL.
+
+- **Type**: TEXT (cheap enum), default `'voice'`.
+- **Migration**: added by `init_db` via `ALTER TABLE ... ADD COLUMN` on
+  databases created before it; existing rows read as `voice`.
+- **Reason to store**: `/stats` shows a separate Groove line and leaves
+  Groove sessions out of "This server", which counts co-working there.
 
 ---
 
