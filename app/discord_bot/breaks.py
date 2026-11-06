@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Literal
 
 import discord
 
-from app import timer_format, voice
+from app import local_audio, timer_format, voice
 from app.config import TEAMODE_TIMEZONE
 from app.constants import (
     BREAK_CANCELLED,
@@ -67,8 +67,8 @@ from app.constants import (
     VOICE_STATUS_BREAK_OVER,
 )
 from app.discord_bot.tasks import spawn_logged
-from app.discord_bot.views import _now, _send_refusal
-from app.session import SessionRegistry
+from app.discord_bot.views import SessionChannel, _now, _send_refusal
+from app.session import SessionMode, SessionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +224,11 @@ class BreakMixin:
     if TYPE_CHECKING:
         # Provided by CommandsMixin — declared here, type-checking only.
         async def _start_session(
-            self, interaction: discord.Interaction, *, via_go_again: bool = False
+            self,
+            interaction: discord.Interaction,
+            *,
+            via_go_again: bool = False,
+            mode: SessionMode = SessionMode.VOICE,
         ) -> None: ...
 
         # Provided by LifecycleMixin — same reasoning.
@@ -323,6 +327,12 @@ class BreakMixin:
         """
         return self._chained_via_go_again.pop(session_id, False)
 
+    def _session_mode(self, session_id: int) -> SessionMode:
+        """Return *session_id*'s mode, defaulting to voice if it is unknown
+        (e.g. after a restart)."""
+        session = self._registry.get(session_id)
+        return session.mode if session is not None else SessionMode.VOICE
+
     async def _disable_chain_message(self, chain: _ChainState) -> None:
         """Edit *chain*'s message to an all-disabled button row.
 
@@ -330,9 +340,9 @@ class BreakMixin:
         WARNING and swallowed.
         """
         channel = self.client.get_channel(chain.channel_id)
-        if not isinstance(channel, discord.VoiceChannel):
+        if not isinstance(channel, (discord.VoiceChannel, discord.TextChannel)):
             logger.warning(
-                "Channel %s for chain state is not a VoiceChannel —"
+                "Channel %s for chain state is not a voice or text channel —"
                 " skipping button disable",
                 chain.channel_id,
             )
@@ -383,7 +393,8 @@ class BreakMixin:
         matches *session_id* (see ``_ChainState``) — this replaces the
         generic stale-session refusal for this purpose. Any voice-channel
         member may click; whoever does becomes facilitator, via the same
-        guarded path as ``/teamode``.
+        guarded path as ``/teamode`` — or ``/groove``, when the finished
+        session was a Groove one.
         """
         channel_id = interaction.channel_id
         chain = self._chain_states.get(channel_id) if channel_id is not None else None
@@ -391,7 +402,9 @@ class BreakMixin:
             await _send_refusal(interaction, MSG_SESSION_INACTIVE)
             return
 
-        await self._start_session(interaction, via_go_again=True)
+        await self._start_session(
+            interaction, via_go_again=True, mode=self._session_mode(session_id)
+        )
 
     async def _handle_break(
         self,
@@ -416,12 +429,15 @@ class BreakMixin:
             return
 
         channel = interaction.channel
-        if not isinstance(channel, discord.VoiceChannel):
+        if not isinstance(channel, (discord.VoiceChannel, discord.TextChannel)):
             await _send_refusal(interaction, MSG_SESSION_INACTIVE)
             return
-        # Narrowed to a VoiceChannel — use its id (always present) rather
+        # Narrowed to a session channel — use its id (always present) rather
         # than the interaction's optional channel_id from here on.
         channel_id = channel.id
+
+        # A Groove break has no voice side: no in-voice check, no connect.
+        mode = self._session_mode(session_id)
 
         user = interaction.user
         voice_state = user.voice if isinstance(user, discord.Member) else None
@@ -430,7 +446,7 @@ class BreakMixin:
             and voice_state.channel is not None
             and voice_state.channel.id == channel.id
         )
-        if not user_in_voice:
+        if mode == SessionMode.VOICE and not user_in_voice:
             await _send_refusal(interaction, MSG_NOT_IN_VOICE)
             return
 
@@ -454,15 +470,16 @@ class BreakMixin:
         # logged and the break continues without a status (the end still
         # tries to connect, same as today).
         voice_client: discord.VoiceClient | None = None
-        try:
-            voice_client = await voice.connect(channel)
-        except Exception:
-            logger.warning(
-                "Voice connect failed for break start in channel %s", channel_id
-            )
-            voice_client = None
+        if mode == SessionMode.VOICE and isinstance(channel, discord.VoiceChannel):
+            try:
+                voice_client = await voice.connect(channel)
+            except Exception:
+                logger.warning(
+                    "Voice connect failed for break start in channel %s", channel_id
+                )
+                voice_client = None
 
-        if voice_client is not None:
+        if voice_client is not None and isinstance(channel, discord.VoiceChannel):
             await self._set_voice_status(channel, VOICE_STATUS_BREAK.format(hhmm=hhmm))
 
         task = spawn_logged(
@@ -472,6 +489,7 @@ class BreakMixin:
                 voice_channel=channel,
                 break_minutes=break_minutes,
                 voice_client=voice_client,
+                mode=mode,
             ),
             name=f"break:{channel_id}",
         )
@@ -498,11 +516,15 @@ class BreakMixin:
         *,
         channel_id: int,
         session_id: int,
-        voice_channel: discord.VoiceChannel,
+        voice_channel: SessionChannel,
         break_minutes: int = BREAK_MINUTES,
         voice_client: discord.VoiceClient | None = None,
+        mode: SessionMode = SessionMode.VOICE,
     ) -> None:
         """Sleep *break_minutes*, then run the break-over sequence.
+
+        A Groove break (*mode* ``GROOVE``) never touches voice: the
+        break-over reverie plays on the host machine instead.
 
         *voice_client* is the client connected at break start, if that
         connect succeeded — reused here rather than reconnecting. If it is
@@ -523,16 +545,28 @@ class BreakMixin:
         self._break_states.pop(channel_id, None)
         logger.info("Break ended in channel %s for session %s", channel_id, session_id)
 
-        if voice_client is None or not voice_client.is_connected():
-            try:
-                voice_client = await voice.connect(voice_channel)
-            except Exception:
+        if mode == SessionMode.GROOVE:
+            if not await local_audio.play(voice.REVERIE_PATH):
                 logger.warning(
-                    "Voice connect failed for break end in channel %s", channel_id
+                    "Reverie playback failed for break end in channel %s", channel_id
                 )
+        elif voice_client is None or not voice_client.is_connected():
+            if isinstance(voice_channel, discord.VoiceChannel):
+                try:
+                    voice_client = await voice.connect(voice_channel)
+                except Exception:
+                    logger.warning(
+                        "Voice connect failed for break end in channel %s", channel_id
+                    )
+                    voice_client = None
+            else:
                 voice_client = None
 
-        if voice_client is not None:
+        if (
+            mode == SessionMode.VOICE
+            and voice_client is not None
+            and isinstance(voice_channel, discord.VoiceChannel)
+        ):
             await self._set_voice_status(
                 voice_channel,
                 VOICE_STATUS_BREAK_OVER.format(
@@ -613,9 +647,9 @@ class BreakMixin:
                 )
 
         channel = self.client.get_channel(channel_id)
-        if not isinstance(channel, discord.VoiceChannel):
+        if not isinstance(channel, (discord.VoiceChannel, discord.TextChannel)):
             logger.warning(
-                "Channel %s for break state is not a VoiceChannel —"
+                "Channel %s for break state is not a voice or text channel —"
                 " skipping cancel edit",
                 channel_id,
             )

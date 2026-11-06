@@ -44,7 +44,7 @@ from app.constants import (
 from app.db import init_db
 from app.discord_bot import TeaModeBot
 from app.discord_bot.breaks import _BreakState, _ChainState
-from app.session import SessionRegistry
+from app.session import SessionMode, SessionRegistry
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -334,7 +334,9 @@ async def test_go_again_routes_through_shared_start_session(bot: TeaModeBot) -> 
     with patch.object(bot, "_start_session", new=AsyncMock()) as mock_start:
         await bot.on_interaction(inter)
 
-    mock_start.assert_awaited_once_with(inter, via_go_again=True)
+    mock_start.assert_awaited_once_with(
+        inter, via_go_again=True, mode=SessionMode.VOICE
+    )
 
 
 @pytest.mark.asyncio

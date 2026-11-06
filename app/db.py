@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     completed_intention  INTEGER,
     followup_note        TEXT,
     status               TEXT    NOT NULL,
-    handoff_facilitator_id TEXT
+    handoff_facilitator_id TEXT,
+    mode                 TEXT    NOT NULL DEFAULT 'voice'
 )
 """
 
@@ -57,14 +58,29 @@ def _now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _migrate_add_mode(conn: sqlite3.Connection) -> None:
+    """Add the ``mode`` column to a ``sessions`` table created before it.
+
+    Idempotent: a no-op when the column already exists. Existing rows get
+    the default ``'voice'`` — every session before /groove was a voice one.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    if "mode" not in columns:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'voice'"
+        )
+
+
 def init_db(path: str | Path) -> sqlite3.Connection:
     """Open (or create) the database at *path* and apply the schema.
 
-    Safe to call repeatedly — uses CREATE TABLE IF NOT EXISTS and
-    CREATE INDEX IF NOT EXISTS. Returns the open connection.
+    Safe to call repeatedly — uses CREATE TABLE IF NOT EXISTS,
+    CREATE INDEX IF NOT EXISTS, and idempotent column migrations. Returns
+    the open connection.
     """
     conn = sqlite3.connect(str(path))
     conn.execute(_CREATE_SESSIONS)
+    _migrate_add_mode(conn)
     conn.execute(_CREATE_IDX_FACILITATOR)
     conn.execute(_CREATE_IDX_STARTED_AT)
     conn.execute(_CREATE_SESSION_PARTICIPANTS)
@@ -80,8 +96,9 @@ def insert_pending_session(
     text_channel_id: str,
     voice_channel_id: str,
     facilitator_id: str,
+    mode: str = "voice",
 ) -> int:
-    """INSERT a row with status='pending' at /teamode invocation.
+    """INSERT a row with status='pending' at /teamode or /groove invocation.
 
     started_at and duration_minutes are left NULL; they are populated by
     update_started_at_active (when the timer begins) and update_duration
@@ -93,8 +110,8 @@ def insert_pending_session(
         """
         INSERT INTO sessions (
             guild_id, text_channel_id, voice_channel_id, facilitator_id,
-            status
-        ) VALUES (?, ?, ?, ?, ?)
+            status, mode
+        ) VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             guild_id,
@@ -102,6 +119,7 @@ def insert_pending_session(
             voice_channel_id,
             facilitator_id,
             "pending",
+            mode,
         ),
     )
     conn.commit()
@@ -304,8 +322,12 @@ def fetch_user_stats_rows(
     conn: sqlite3.Connection,
     *,
     user_id: str,
+    mode: str | None = None,
 ) -> list[StatsSessionRow]:
     """Return qualifying sessions *user_id* was in or originally facilitated.
+
+    *mode* (``'voice'`` / ``'groove'``) restricts the rows to that session
+    mode; ``None`` (the default) returns every mode.
 
     Qualifying means ``status`` reached follow-up
     (``'completed'`` or ``'followup_timeout'``). A session matches when
@@ -334,8 +356,9 @@ def fetch_user_stats_rows(
                    SELECT session_id FROM session_participants
                    WHERE user_id = :uid
                ))
+          AND (:mode IS NULL OR mode = :mode)
         """,  # noqa: S608
-        {"uid": user_id, **status_params},
+        {"uid": user_id, "mode": mode, **status_params},
     )
     return [_row_to_stats_row(row) for row in cur.fetchall()]
 
@@ -344,11 +367,14 @@ def fetch_guild_stats_rows(
     conn: sqlite3.Connection,
     *,
     guild_id: str,
+    mode: str | None = None,
 ) -> list[StatsSessionRow]:
     """Return qualifying sessions started in *guild_id*.
 
     Qualifying means ``status`` reached follow-up
-    (``'completed'`` or ``'followup_timeout'``).
+    (``'completed'`` or ``'followup_timeout'``). *mode* (``'voice'`` /
+    ``'groove'``) restricts the rows to that session mode; ``None`` (the
+    default) returns every mode.
     """
     placeholders = ",".join("?" * len(_QUALIFYING_STATUSES))
     cur = conn.execute(
@@ -356,8 +382,9 @@ def fetch_guild_stats_rows(
         SELECT started_at, duration_minutes, completed_intention
         FROM sessions
         WHERE guild_id = ? AND status IN ({placeholders})
+          AND (? IS NULL OR mode = ?)
         """,  # noqa: S608
-        (guild_id, *_QUALIFYING_STATUSES),
+        (guild_id, *_QUALIFYING_STATUSES, mode, mode),
     )
     return [_row_to_stats_row(row) for row in cur.fetchall()]
 

@@ -228,7 +228,7 @@ async def test_activation_sets_timer_status_with_end_hhmm(
 
     fake_voice_channel = _fake_voice_channel(333)
     fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
-    modal = IntentionModal(bot=bot, session_id=sid, voice_channel=fake_voice_channel)
+    modal = IntentionModal(bot=bot, session_id=sid, channel=fake_voice_channel)
     text_input = cast(
         discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
     )
@@ -282,7 +282,7 @@ async def test_voice_connect_failure_does_not_set_voice_status(
 
     fake_voice_channel = _fake_voice_channel(333)
     _install_fake_client(bot, MagicMock(return_value=fake_voice_channel))
-    modal = IntentionModal(bot=bot, session_id=sid, voice_channel=fake_voice_channel)
+    modal = IntentionModal(bot=bot, session_id=sid, channel=fake_voice_channel)
     text_input = cast(
         discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
     )

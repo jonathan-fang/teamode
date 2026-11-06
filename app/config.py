@@ -60,3 +60,18 @@ _raw_guild_ids: str = os.environ.get("TEAMODE_DEV_GUILD_ID", "")
 TEAMODE_DEV_GUILD_IDS: list[int] = [
     int(gid.strip()) for gid in _raw_guild_ids.split(",") if gid.strip()
 ]
+
+
+def _parse_flag(raw: str, *, default: bool) -> bool:
+    """Parse an on/off env var; unset/empty returns *default*."""
+    if not raw.strip():
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+# Whether /groove sessions play their chimes on the host machine (via
+# ffplay). On by default — the bot runs on the facilitator's own laptop.
+# Turn off on a headless host (e.g. a VPS), where there is no one to hear.
+TEAMODE_GROOVE_LOCAL_AUDIO: bool = _parse_flag(
+    os.environ.get("TEAMODE_GROOVE_LOCAL_AUDIO", ""), default=True
+)

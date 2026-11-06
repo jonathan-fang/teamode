@@ -6,15 +6,16 @@ import logging
 
 import discord
 
-from app import timer_format, voice
+from app import local_audio, timer_format, voice
 from app.constants import (
     BACKOFF_FLOOR_CAP,
     BACKOFF_FLOOR_DEFAULT,
     EDIT_INTERVAL_SECONDS,
     WRAP_UP_MINUTES,
 )
+from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.views import _build_timer_message, _EditState, _SetupMessages
-from app.session import SessionRegistry, SessionState
+from app.session import SessionMode, SessionRegistry, SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +83,17 @@ class TimerMixin:
                             setup.nudge_message_id = nudge_message.id
 
                 # The chime fires only when the nudge fires (above), whether
-                # or not the nudge message send itself succeeded.
+                # or not the nudge message send itself succeeded. A Groove
+                # session plays it on the host machine, in the background so
+                # the tick isn't held up for the chime's length.
                 voice_client = self._voice_clients.get(session_id)
-                if voice_client is None:
+                if live_session.mode == SessionMode.GROOVE:
+
+                    async def _local_chime() -> None:
+                        await local_audio.play(voice.WIND_CHIME_PATH)
+
+                    spawn_logged(_local_chime(), name=f"groove-wind-chime:{session_id}")
+                elif voice_client is None:
                     logger.warning(
                         "No voice client for session %s — skipping wind chime",
                         session_id,
