@@ -253,9 +253,7 @@ async def test_modal_submit_records_intention_and_posts_timer(
     )
 
     fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
-    modal = IntentionModal(
-        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
-    )
+    modal = IntentionModal(bot=bot, session_id=session_id, channel=fake_voice_channel)
 
     # Simulate the text-input value that discord.py would populate on submit.
     text_input = cast(
@@ -348,9 +346,7 @@ async def test_modal_submit_cancels_pending_expiry(
 
     fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
     fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
-    modal = IntentionModal(
-        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
-    )
+    modal = IntentionModal(bot=bot, session_id=session_id, channel=fake_voice_channel)
     inter = AsyncMock()
     inter.response = AsyncMock()
     inter.channel = fake_voice_channel
@@ -383,9 +379,7 @@ async def test_modal_submit_voice_connect_failure_cancels_session(
     )
 
     fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
-    modal = IntentionModal(
-        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
-    )
+    modal = IntentionModal(bot=bot, session_id=session_id, channel=fake_voice_channel)
     text_input = cast(
         discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
     )
@@ -444,9 +438,7 @@ async def test_modal_submit_disables_welcome_buttons(
     )
     fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
 
-    modal = IntentionModal(
-        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
-    )
+    modal = IntentionModal(bot=bot, session_id=session_id, channel=fake_voice_channel)
     text_input = cast(
         discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
     )
@@ -502,9 +494,7 @@ async def test_modal_submit_welcome_edit_failure_logged_session_still_active(
     )
     fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
 
-    modal = IntentionModal(
-        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
-    )
+    modal = IntentionModal(bot=bot, session_id=session_id, channel=fake_voice_channel)
     text_input = cast(
         discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
     )
@@ -551,9 +541,7 @@ async def test_second_submit_for_non_pending_session_is_refused(
 
     fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
     fake_voice_channel.send = AsyncMock()
-    modal = IntentionModal(
-        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
-    )
+    modal = IntentionModal(bot=bot, session_id=session_id, channel=fake_voice_channel)
     text_input = cast(
         discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
     )
@@ -616,9 +604,7 @@ async def test_modal_submit_snapshots_participants(
     fake_client.user.id = 999
     bot.client = fake_client  # type: ignore[assignment]
 
-    modal = IntentionModal(
-        bot=bot, session_id=session_id, voice_channel=fake_voice_channel
-    )
+    modal = IntentionModal(bot=bot, session_id=session_id, channel=fake_voice_channel)
     text_input = cast(
         discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
     )

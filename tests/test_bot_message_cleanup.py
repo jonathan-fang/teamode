@@ -322,7 +322,7 @@ async def test_voice_connect_failure_deletes_setup_messages(
 
     fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
     fake_voice_channel.get_partial_message = MagicMock(return_value=AsyncMock())
-    modal = IntentionModal(bot=bot, session_id=sid, voice_channel=fake_voice_channel)
+    modal = IntentionModal(bot=bot, session_id=sid, channel=fake_voice_channel)
     text_input = modal.intention_field.component
     assert isinstance(text_input, discord.ui.TextInput)
     text_input._value = "will be cancelled"
@@ -629,7 +629,7 @@ async def test_initial_timer_send_includes_non_bot_mentions(
 
     _install_fake_client(bot, None, user_id=1)
 
-    modal = IntentionModal(bot=bot, session_id=sid, voice_channel=fake_voice_channel)
+    modal = IntentionModal(bot=bot, session_id=sid, channel=fake_voice_channel)
     text_input = modal.intention_field.component
     assert isinstance(text_input, discord.ui.TextInput)
     text_input._value = "focus"

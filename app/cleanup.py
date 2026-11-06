@@ -31,6 +31,7 @@ from app.constants import (
     END_OF_SESSION_NO_MENTION,
     FOLLOWUP_PROMPT,
     FOLLOWUP_WHY_PROMPT,
+    GROOVE_END_PING,
     HANDOFF_ANNOUNCE,
     MSG_PARTICIPANT_PROMPT,
     MSG_WRAP_UP_NUDGE,
@@ -74,6 +75,7 @@ _AUTO_HANDOFF_ANNOUNCE_RE = _template_pattern(AUTO_HANDOFF_ANNOUNCE)
 _PARTICIPANT_PROMPT_RE = _template_pattern(MSG_PARTICIPANT_PROMPT)
 _END_OF_SESSION_MENTION_RE = _template_pattern(END_OF_SESSION_MENTION)
 _FOLLOWUP_WHY_PROMPT_RE = _template_pattern(FOLLOWUP_WHY_PROMPT)
+_GROOVE_END_PING_RE = _template_pattern(GROOVE_END_PING)
 _WRAP_UP_NUDGE_RE = _template_pattern(MSG_WRAP_UP_NUDGE)
 _CHAIN_PROMPT_STREAK_RE = _template_pattern(CHAIN_PROMPT_STREAK)
 _BREAK_STARTED_RE = _template_pattern(BREAK_STARTED)
@@ -116,6 +118,10 @@ def is_delete_eligible(*, content: str, embed_titles: Sequence[str]) -> bool:
         or _END_OF_SESSION_MENTION_RE.fullmatch(content)
         or any(title == END_EMBED_TITLE for title in embed_titles)
     ):
+        return True
+
+    # Groove end-of-session ping.
+    if _GROOVE_END_PING_RE.fullmatch(content):
         return True
 
     # Reflect — content alone identifies it; the embed (present or already

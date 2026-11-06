@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from app import timer_format, voice
+from app import local_audio, timer_format, voice
 from app.config import TEAMODE_TIMEZONE
 from app.constants import (
     AUTO_HANDOFF_ANNOUNCE,
@@ -21,6 +21,7 @@ from app.constants import (
     FOLLOWUP_PROMPT,
     FOLLOWUP_TIMEOUT_SECONDS,
     FOLLOWUP_WHY_PROMPT,
+    GROOVE_END_PING,
     MSG_PENDING_EXPIRED,
     PENDING_TIMEOUT_SECONDS,
     REFLECT_EMBED_DESCRIPTION,
@@ -41,7 +42,7 @@ from app.discord_bot.views import (
     _now,
     _SetupMessages,
 )
-from app.session import SessionRegistry, SessionState
+from app.session import SessionMode, SessionRegistry, SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -180,9 +181,9 @@ class LifecycleMixin:
             return
 
         channel = self.client.get_channel(setup.channel_id)
-        if not isinstance(channel, discord.VoiceChannel):
+        if not isinstance(channel, (discord.VoiceChannel, discord.TextChannel)):
             logger.warning(
-                "Channel %s for session %s is not a VoiceChannel —"
+                "Channel %s for session %s is not a voice or text channel —"
                 " skipping setup-message deletion",
                 setup.channel_id,
                 session_id,
@@ -248,7 +249,7 @@ class LifecycleMixin:
         setup = self._setup_messages.get(session_id)
         if setup is not None:
             channel = self.client.get_channel(setup.channel_id)
-            if isinstance(channel, discord.VoiceChannel):
+            if isinstance(channel, (discord.VoiceChannel, discord.TextChannel)):
                 try:
                     partial = channel.get_partial_message(setup.welcome_message_id)
                     await partial.edit(
@@ -264,7 +265,7 @@ class LifecycleMixin:
                     )
             else:
                 logger.warning(
-                    "Channel %s for session %s is not a VoiceChannel —"
+                    "Channel %s for session %s is not a voice or text channel —"
                     " skipping pending-expiry edit",
                     setup.channel_id,
                     session_id,
@@ -284,7 +285,7 @@ class LifecycleMixin:
         self,
         *,
         session_id: int,
-        voice_client: discord.VoiceClient,
+        voice_client: discord.VoiceClient | None,
         channel: discord.abc.Messageable | None,
     ) -> None:
         """Run the full end-of-session sequence after countdown reaches zero.
@@ -293,6 +294,10 @@ class LifecycleMixin:
         Session-complete embed (@-mention) → reverie+disconnect → Reflect
         embed (facilitator prompt) → pre-populate reactions → 3-minute
         watchdog.
+
+        A Groove session (*voice_client* ``None``) skips the voice status,
+        plays the reverie on the host machine instead, and follows it with
+        a ``GROOVE_END_PING`` @-mention of the facilitator.
         """
         # Step 0: finalize the timer message — strip its embed and rewrite
         # the content to a compact plain-text record (intention, duration +
@@ -334,7 +339,7 @@ class LifecycleMixin:
             return
 
         # Step a: Snapshot voice channel members (excluding the bot).
-        voice_channel = voice_client.channel
+        voice_channel = voice_client.channel if voice_client is not None else None
         if isinstance(voice_channel, discord.VoiceChannel):
             members = [
                 m
@@ -363,7 +368,7 @@ class LifecycleMixin:
 
         # Set the Finished voice status now that Time's up has posted.
         session = self._registry.get(session_id)
-        if session is not None:
+        if session is not None and session.mode == SessionMode.VOICE:
             await self._set_voice_status(
                 int(session.voice_channel_id),
                 VOICE_STATUS_FINISHED.format(
@@ -379,10 +384,31 @@ class LifecycleMixin:
             cleanup = self._channel_cleanup.setdefault(channel_id, _ChannelCleanup())
             cleanup.times_up_id = end_message.id
 
-        # Step c: Reverie playback + disconnect.
-        playback_ok = await voice.play_reverie_then_disconnect(voice_client)
+        # Step c: Reverie playback + disconnect (voice), or host-machine
+        # playback + facilitator ping (Groove).
+        if voice_client is not None:
+            playback_ok = await voice.play_reverie_then_disconnect(voice_client)
+        else:
+            playback_ok = await local_audio.play(voice.REVERIE_PATH)
         if not playback_ok:
             logger.warning("Reverie playback failed for session %s", session_id)
+
+        if session is not None and session.mode == SessionMode.GROOVE:
+            # In content, not an embed, so the mention actually notifies —
+            # a backup for when the host-machine chime can't be heard.
+            try:
+                ping_message = await channel.send(
+                    GROOVE_END_PING.format(mention=f"<@{session.facilitator_id}>"),
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
+            except discord.HTTPException:
+                logger.warning("Failed to send Groove ping for session %s", session_id)
+            else:
+                if channel_id is not None:
+                    cleanup = self._channel_cleanup.setdefault(
+                        channel_id, _ChannelCleanup()
+                    )
+                    cleanup.ping_id = ping_message.id
 
         # Step d: Post Reflect message with facilitator prompt.
         facilitator_prompt = FOLLOWUP_PROMPT

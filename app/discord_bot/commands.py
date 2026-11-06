@@ -1,4 +1,4 @@
-"""The /teamode and /handoff slash command handlers."""
+"""The /teamode, /groove and /handoff slash command handlers."""
 
 from __future__ import annotations
 
@@ -10,10 +10,12 @@ import discord
 from discord import app_commands
 
 from app.constants import (
+    GROOVE_COMMAND_DESCRIPTION,
     GUILD_DAILY_CAP,
     HANDOFF_ANNOUNCE,
     HANDOFF_COMMAND_DESCRIPTION,
     HANDOFF_MEMBER_DESCRIPTION,
+    MSG_GROOVE_NO_HANDOFF,
     MSG_HANDOFF_NO_SESSION,
     MSG_HANDOFF_NOT_FACILITATOR,
     MSG_HANDOFF_SELF,
@@ -36,7 +38,7 @@ from app.discord_bot.views import (
     _SetupMessages,
 )
 from app.rate_limit import RateLimiter
-from app.session import SessionRegistry
+from app.session import SessionMode, SessionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,7 @@ class CommandsMixin:
         def _reset_streak(self, channel_id: int) -> None: ...
 
     def _register_command(self) -> None:
-        """Register /teamode and /handoff on the global command tree.
+        """Register /teamode, /groove and /handoff on the global command tree.
 
         Commands are registered globally here; on_ready copies them to each
         guild in TEAMODE_DEV_GUILD_IDS for instant propagation during dev.
@@ -79,6 +81,13 @@ class CommandsMixin:
         )
         async def teamode(interaction: discord.Interaction) -> None:
             await self._handle_teamode(interaction)
+
+        @self.tree.command(
+            name="groove",
+            description=GROOVE_COMMAND_DESCRIPTION,
+        )
+        async def groove(interaction: discord.Interaction) -> None:
+            await self._handle_groove(interaction)
 
         @self.tree.command(
             name="handoff",
@@ -94,8 +103,16 @@ class CommandsMixin:
         """The /teamode slash command — delegates to the shared session start."""
         await self._start_session(interaction)
 
+    async def _handle_groove(self, interaction: discord.Interaction) -> None:
+        """The /groove slash command — a session with no voice connection."""
+        await self._start_session(interaction, mode=SessionMode.GROOVE)
+
     async def _start_session(
-        self, interaction: discord.Interaction, *, via_go_again: bool = False
+        self,
+        interaction: discord.Interaction,
+        *,
+        via_go_again: bool = False,
+        mode: SessionMode = SessionMode.VOICE,
     ) -> None:
         """Cumulative invocation guard → rate limit → create session → post welcome.
 
@@ -106,12 +123,23 @@ class CommandsMixin:
         new session for the streak logic in
         ``BreakMixin._post_chain_prompt``, and a plain ``/teamode`` start
         (``via_go_again=False``) always resets the channel's streak.
+
+        *mode* is :attr:`SessionMode.GROOVE` for ``/groove`` (and a Go again
+        chained from a Groove session): any text channel works, the invoker
+        need not be in voice, and Ocha never joins voice.
         """
 
-        # Guard 1 — must be invoked from a voice channel's text chat.
-        # In discord.py, a voice channel's text-chat surface shares the
-        # VoiceChannel's channel id; interaction.channel is a VoiceChannel.
-        if not isinstance(interaction.channel, discord.VoiceChannel):
+        # Guard 1 — /teamode must be invoked from a voice channel's text
+        # chat. In discord.py, a voice channel's text-chat surface shares
+        # the VoiceChannel's channel id; interaction.channel is a
+        # VoiceChannel. /groove also accepts a plain text channel.
+        channel = interaction.channel
+        allowed = (
+            (discord.VoiceChannel, discord.TextChannel)
+            if mode == SessionMode.GROOVE
+            else (discord.VoiceChannel,)
+        )
+        if not isinstance(channel, allowed):
             embed = discord.Embed(
                 description=MSG_WRONG_CHANNEL,
                 color=COLORS["refusal"],
@@ -119,15 +147,17 @@ class CommandsMixin:
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        # Guard 2 — invoker must be in the voice channel.
+        # Guard 2 — /teamode's invoker must be in the voice channel.
         user = interaction.user
         voice_state = user.voice if isinstance(user, discord.Member) else None
-        user_in_voice = (
-            voice_state is not None
+        voice_channel = (
+            voice_state.channel
+            if voice_state is not None
             and voice_state.channel is not None
-            and voice_state.channel.id == interaction.channel.id
+            and voice_state.channel.id == channel.id
+            else None
         )
-        if not user_in_voice:
+        if mode == SessionMode.VOICE and voice_channel is None:
             embed = discord.Embed(
                 description=MSG_NOT_IN_VOICE,
                 color=COLORS["refusal"],
@@ -136,9 +166,7 @@ class CommandsMixin:
             return
 
         # Guard 3 — no active session in this text channel.
-        existing = self._registry.find_active_in_text_channel(
-            str(interaction.channel.id)
-        )
+        existing = self._registry.find_active_in_text_channel(str(channel.id))
         if existing is not None:
             embed = discord.Embed(
                 description=MSG_SESSION_ACTIVE,
@@ -178,15 +206,15 @@ class CommandsMixin:
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        # All guards passed — create the session.
-        assert (
-            voice_state is not None and voice_state.channel is not None
-        )  # narrowed above
+        # All guards passed — create the session. A voice session's voice
+        # channel is its text channel (Guard 2); a Groove session has no
+        # voice channel, so the text channel id fills the NOT NULL column.
         session = self._registry.create_pending_session(
             guild_id=str(interaction.guild_id),
-            text_channel_id=str(interaction.channel.id),
-            voice_channel_id=str(voice_state.channel.id),
+            text_channel_id=str(channel.id),
+            voice_channel_id=str(channel.id),
             facilitator_id=str(interaction.user.id),
+            mode=mode,
         )
 
         # Record whether this session was chained via Go again, for the
@@ -194,56 +222,64 @@ class CommandsMixin:
         # start always restarts the channel's streak from scratch.
         self._chained_via_go_again[session.session_id] = via_go_again
         if not via_go_again:
-            self._reset_streak(interaction.channel.id)
+            self._reset_streak(channel.id)
 
         # Clean up the previous session's leftover messages in this channel,
         # if any — this also covers a future "Go again" button reusing this
         # same start path. Each step is independent and best-effort: a
         # failure is logged and does not block the others or the new session.
-        previous_cleanup = self._channel_cleanup.pop(interaction.channel.id, None)
+        previous_cleanup = self._channel_cleanup.pop(channel.id, None)
         if previous_cleanup is not None:
             if previous_cleanup.times_up_id is not None:
                 try:
-                    await interaction.channel.get_partial_message(
+                    await channel.get_partial_message(
                         previous_cleanup.times_up_id
                     ).delete()
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     logger.warning(
                         "Failed to delete previous Time's up message %s in channel %s",
                         previous_cleanup.times_up_id,
-                        interaction.channel.id,
+                        channel.id,
                     )
             if previous_cleanup.why_id is not None:
                 try:
-                    await interaction.channel.get_partial_message(
-                        previous_cleanup.why_id
-                    ).delete()
+                    await channel.get_partial_message(previous_cleanup.why_id).delete()
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     logger.warning(
                         "Failed to delete previous follow-up why message %s"
                         " in channel %s",
                         previous_cleanup.why_id,
-                        interaction.channel.id,
+                        channel.id,
+                    )
+            if previous_cleanup.ping_id is not None:
+                try:
+                    await channel.get_partial_message(previous_cleanup.ping_id).delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logger.warning(
+                        "Failed to delete previous Groove ping message %s"
+                        " in channel %s",
+                        previous_cleanup.ping_id,
+                        channel.id,
                     )
             if previous_cleanup.reflect_id is not None:
                 try:
-                    await interaction.channel.get_partial_message(
-                        previous_cleanup.reflect_id
-                    ).edit(embed=None)
+                    await channel.get_partial_message(previous_cleanup.reflect_id).edit(
+                        embed=None
+                    )
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     logger.warning(
                         "Failed to strip embed from previous Reflect message %s"
                         " in channel %s",
                         previous_cleanup.reflect_id,
-                        interaction.channel.id,
+                        channel.id,
                     )
 
         # Clear any standing chain prompt (Go again / break offer) and
         # cancel any in-progress break in this channel — a new session
         # (this one) supersedes both. This also covers a "Go again" click,
         # which reaches here via the same start path.
-        await self._clear_chain_state(interaction.channel.id)
-        await self._cancel_break(interaction.channel.id)
+        await self._clear_chain_state(channel.id)
+        await self._cancel_break(channel.id)
 
         # Build the welcome embed.
         embed = _build_welcome_embed()
@@ -258,7 +294,7 @@ class CommandsMixin:
         # interaction tokens expire well before a session ends.
         welcome_message = await interaction.original_response()
         self._setup_messages[session.session_id] = _SetupMessages(
-            channel_id=interaction.channel.id,
+            channel_id=channel.id,
             welcome_message_id=welcome_message.id,
         )
 
@@ -269,12 +305,14 @@ class CommandsMixin:
         # Post the participant prompt after the welcome embed.
         await asyncio.sleep(WELCOME_PROMPT_DELAY_SECONDS)
 
-        # Snapshot voice members, filter the bot itself.
-        assert voice_state.channel is not None
+        # Snapshot voice members, filter the bot itself. A Groove session
+        # has no voice members to ping.
         bot_id = self.client.user.id if self.client.user else None
-        members = [
-            m for m in voice_state.channel.members if not m.bot and m.id != bot_id
-        ]
+        members = (
+            [m for m in voice_channel.members if not m.bot and m.id != bot_id]
+            if mode == SessionMode.VOICE and voice_channel is not None
+            else []
+        )
         if members:
             mentions_prefix = " ".join(m.mention for m in members) + " "
         else:
@@ -305,6 +343,15 @@ class CommandsMixin:
         if session is None:
             embed = discord.Embed(
                 description=MSG_HANDOFF_NO_SESSION,
+                color=COLORS["refusal"],
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # Groove sessions are solo — there is no one in voice to hand off to.
+        if session.mode == SessionMode.GROOVE:
+            embed = discord.Embed(
+                description=MSG_GROOVE_NO_HANDOFF,
                 color=COLORS["refusal"],
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)

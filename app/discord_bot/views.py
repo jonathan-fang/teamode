@@ -50,9 +50,13 @@ from app.constants import (
     WELCOME_EMBED_TITLE,
 )
 from app.discord_bot.tasks import spawn_logged
-from app.session import SessionRegistry, SessionState
+from app.session import SessionMode, SessionRegistry, SessionState
 
 logger = logging.getLogger(__name__)
+
+# The channel a session's messages live in: a voice channel's text chat for
+# /teamode, or (for /groove) a plain text channel or a voice channel's chat.
+SessionChannel = discord.VoiceChannel | discord.TextChannel
 
 # ---------------------------------------------------------------------------
 # Color palette — from UI-ADR § "Color palette"
@@ -250,6 +254,9 @@ class _ChannelCleanup:
     times_up_id: int | None = None
     reflect_id: int | None = None
     why_id: int | None = None
+    # The Groove end-of-session ping (GROOVE_END_PING); None for voice
+    # sessions.
+    ping_id: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +292,7 @@ class _ModalBot(Protocol):
         self,
         *,
         session_id: int,
-        voice_client: discord.VoiceClient,
+        voice_client: discord.VoiceClient | None,
         channel: discord.abc.Messageable | None,
     ) -> None: ...
 
@@ -331,19 +338,20 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         *,
         bot: _ModalBot,
         session_id: int,
-        voice_channel: discord.VoiceChannel,
+        channel: SessionChannel,
     ) -> None:
         """Initialise the modal.
 
-        *voice_channel* is the resolved ``discord.VoiceChannel`` from the
-        click-handler call site.  Passing it here avoids a REST round-trip
+        *channel* is the resolved session channel from the click-handler
+        call site — the voice channel for /teamode, the text channel for
+        /groove.  Passing it here avoids a REST round-trip
         (``fetch_channel``) in :meth:`on_submit` and the permission gate that
         round-trip would cross.
         """
         super().__init__()
         self._bot = bot
         self._session_id = session_id
-        self._voice_channel = voice_channel
+        self._channel = channel
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         # Double-submit guard: the session must still be PENDING. Because
@@ -388,9 +396,9 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         setup = self._bot._setup_messages.get(self._session_id)
         if setup is not None:
             try:
-                await self._voice_channel.get_partial_message(
-                    setup.welcome_message_id
-                ).edit(view=_build_timer_view(self._session_id, disabled=True))
+                await self._channel.get_partial_message(setup.welcome_message_id).edit(
+                    view=_build_timer_view(self._session_id, disabled=True)
+                )
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 logger.warning(
                     "Failed to disable welcome buttons on intention submit"
@@ -398,9 +406,23 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
                     self._session_id,
                 )
 
+        # --- Groove: no voice — straight to the timer ---
+        if session.mode == SessionMode.GROOVE:
+            await self._activate(session, voice_client=None, voice_channel=None)
+            return
+
         # --- Connect voice ---
         # Use the channel resolved at click-handler time — no REST round-trip.
-        voice_channel = self._voice_channel
+        # A voice session's channel is always a VoiceChannel (Guard 1 in
+        # CommandsMixin._start_session).
+        voice_channel = self._channel
+        if not isinstance(voice_channel, discord.VoiceChannel):
+            logger.error(
+                "Voice session %s has a non-voice channel %s",
+                self._session_id,
+                voice_channel.id,
+            )
+            return
         try:
             voice_client = await voice.connect(voice_channel)
         except Exception:
@@ -418,7 +440,23 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         # Stash the voice client so the solo-grace flow can disconnect it.
         self._bot._voice_clients[self._session_id] = voice_client
 
-        # --- Advance to ACTIVE and post the timer message ---
+        await self._activate(
+            session, voice_client=voice_client, voice_channel=voice_channel
+        )
+
+    async def _activate(
+        self,
+        session: session_module.Session,
+        *,
+        voice_client: discord.VoiceClient | None,
+        voice_channel: discord.VoiceChannel | None,
+    ) -> None:
+        """Advance to ACTIVE, post the timer message, and schedule the countdown.
+
+        *voice_client* / *voice_channel* are ``None`` for a Groove session,
+        which skips the voice status and records only the facilitator as a
+        participant.
+        """
         self._bot._registry.mark_active(session_id=self._session_id)
         assert session.duration_minutes is not None
 
@@ -427,34 +465,41 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         # set immediately below.
         started_at = _now()
         ends_at = started_at + timedelta(minutes=session.duration_minutes)
-        await self._bot._set_voice_status(
-            voice_channel,
-            VOICE_STATUS_TIMER.format(
-                hhmm=timer_format.format_hhmm(ends_at, TEAMODE_TIMEZONE)
-            ),
-        )
 
-        # Snapshot the @-mention set for non-bot voice members — the same
-        # filter used for the participant prompt — so the initial timer
-        # message pings everyone present. Stored on the edit state so tick
-        # edits reuse it verbatim without re-pinging (see timer.py, which
-        # sends edits with AllowedMentions.none()).
-        bot_id = self._bot.client.user.id if self._bot.client.user else None
-        mention_members = [
-            m for m in voice_channel.members if not m.bot and m.id != bot_id
-        ]
-        mention_line = " ".join(m.mention for m in mention_members)
+        if voice_channel is not None:
+            await self._bot._set_voice_status(
+                voice_channel,
+                VOICE_STATUS_TIMER.format(
+                    hhmm=timer_format.format_hhmm(ends_at, TEAMODE_TIMEZONE)
+                ),
+            )
+            # Snapshot the @-mention set for non-bot voice members — the
+            # same filter used for the participant prompt — so the initial
+            # timer message pings everyone present. Stored on the edit state
+            # so tick edits reuse it verbatim without re-pinging (see
+            # timer.py, which sends edits with AllowedMentions.none()).
+            bot_id = self._bot.client.user.id if self._bot.client.user else None
+            mention_members = [
+                m for m in voice_channel.members if not m.bot and m.id != bot_id
+            ]
+            mention_line = " ".join(m.mention for m in mention_members)
+            participant_ids = [str(m.id) for m in mention_members]
+        else:
+            # Groove: nobody to ping at start — the facilitator is the only
+            # participant, and gets GROOVE_END_PING at the end instead.
+            mention_line = ""
+            participant_ids = [session.facilitator_id]
 
         # Bookkeeping only: a DB failure must never break the session.
         try:
             self._bot._registry.record_participants(
                 session_id=self._session_id,
-                user_ids=[str(m.id) for m in mention_members],
+                user_ids=participant_ids,
             )
             logger.info(
                 "Session %s participants recorded: %d",
                 self._session_id,
-                len(mention_members),
+                len(participant_ids),
             )
         except sqlite3.Error:
             logger.exception(
@@ -469,9 +514,8 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             seconds_remaining=session.duration_minutes * 60,
             mention_line=mention_line,
         )
-        # Send on the voice channel resolved at click-handler time — the same
-        # typed reference used to connect above, so no cast is needed here.
-        timer_message = await voice_channel.send(
+        # Send on the channel resolved at click-handler time.
+        timer_message = await self._channel.send(
             content=initial_content, embed=initial_embed
         )
 
@@ -484,9 +528,9 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
 
         # --- Schedule countdown, then run the full end-of-session sequence ---
         session_id = self._session_id
-        # The voice channel resolved at click-handler time is Messageable —
-        # reuse it for the end-of-session messages, same as the timer message.
-        channel: discord.abc.Messageable = voice_channel
+        # The channel resolved at click-handler time is Messageable — reuse
+        # it for the end-of-session messages, same as the timer message.
+        channel: discord.abc.Messageable = self._channel
 
         async def _run_and_followup() -> None:
             duration_minutes = session.duration_minutes
@@ -553,7 +597,7 @@ class ViewsMixin:
             self,
             *,
             session_id: int,
-            voice_client: discord.VoiceClient,
+            voice_client: discord.VoiceClient | None,
             channel: discord.abc.Messageable | None,
         ) -> None: ...
 
@@ -616,14 +660,16 @@ class ViewsMixin:
         # (set_duration overwrites). Buttons are disabled once the intention
         # is actually submitted (see IntentionModal.on_submit).
 
-        # interaction.channel is guaranteed to be a VoiceChannel here — the
-        # /teamode invocation guard (Guard 1 in _handle_teamode) already
+        # interaction.channel is guaranteed to be a SessionChannel here — the
+        # invocation guard (Guard 1 in CommandsMixin._start_session) already
         # enforced it.  The assert satisfies pyright's narrowing requirement.
-        assert isinstance(interaction.channel, discord.VoiceChannel)
+        assert isinstance(
+            interaction.channel, (discord.VoiceChannel, discord.TextChannel)
+        )
         modal = IntentionModal(
             bot=self,
             session_id=session_id,
-            voice_channel=interaction.channel,
+            channel=interaction.channel,
         )
         await interaction.response.send_modal(modal)
 

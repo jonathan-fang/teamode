@@ -19,7 +19,15 @@ from __future__ import annotations
 # Tunables
 # ---------------------------------------------------------------------------
 
-DURATIONS_MINUTES: tuple[int, ...] = (5, 10, 15, 25, 30, 50, 80)  # 2 only allows int # smoke # 5, 10, 25, 50 what about like done by certain time? like 10:40am?
+DURATIONS_MINUTES: tuple[int, ...] = (
+    5,
+    10,
+    15,
+    25,
+    30,
+    50,
+    80,
+)  # 2 only allows int # smoke # 5, 10, 25, 50 what about like done by certain time? like 10:40am?
 
 RATE_LIMIT_WINDOW_SECONDS = 300
 RATE_LIMIT_ALLOWANCE = 3
@@ -89,6 +97,17 @@ HANDOFF_COMMAND_DESCRIPTION = (
     "Transfer the facilitator role to another voice-channel member."
 )
 HANDOFF_MEMBER_DESCRIPTION = "The voice-channel member to make the new facilitator."
+
+# /groove — a session run from any text channel, with chimes played on the
+# host machine instead of in voice (see app.local_audio).
+GROOVE_COMMAND_DESCRIPTION = (
+    "Start a TeaMode session from a text channel,"
+    " with chimes played on the host machine."
+)
+MSG_GROOVE_NO_HANDOFF = "Handoff isn't available in Groove sessions."
+# Sent after the reverie at the end of a Groove session. ``{mention}`` is the
+# facilitator's mention — in content (not an embed) so it notifies.
+GROOVE_END_PING = "{mention} 🔔 Time's up."
 
 # /handoff guard refusals
 MSG_HANDOFF_NO_SESSION = "No active TeaMode session in this channel."
@@ -235,6 +254,7 @@ STATS_COMMAND_DESCRIPTION = "Show TeaMode stats for you and this server."
 STATS_TITLE = "🍵 TeaMode stats"
 STATS_SECTION_YOU = "You"
 STATS_SECTION_SERVER = "This server"
+STATS_SECTION_GROOVE = "Groove"
 STATS_ROW_7D = "Last 7 days"
 STATS_ROW_30D = "Last 30 days"
 STATS_ROW_ALL = "All time"

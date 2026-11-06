@@ -13,12 +13,14 @@ from app.constants import (
     MSG_WRONG_CHANNEL,
     STATS_COMMAND_DESCRIPTION,
     STATS_EMPTY,
+    STATS_SECTION_GROOVE,
     STATS_SECTION_SERVER,
     STATS_SECTION_YOU,
     STATS_TITLE,
 )
 from app.db import fetch_user_stats_rows, fetch_guild_stats_rows
 from app.discord_bot.views import COLORS
+from app.session import SessionMode
 from app.stats import (
     compute_stats_summary,
     compute_streak,
@@ -46,7 +48,12 @@ class StatsMixin:
             await self._handle_stats(interaction)
 
     async def _handle_stats(self, interaction: discord.Interaction) -> None:
-        """Handle /stats: an ephemeral embed of You / This server stats."""
+        """Handle /stats: an ephemeral embed of You / Groove / This server stats.
+
+        "You" counts every session; "Groove" is your Groove-only subset,
+        shown only once you have one; "This server" excludes Groove
+        sessions, which are solo work rather than co-working in the server.
+        """
         if interaction.guild_id is None:
             await interaction.response.send_message(MSG_WRONG_CHANNEL, ephemeral=True)
             return
@@ -57,9 +64,15 @@ class StatsMixin:
         tz = TEAMODE_TIMEZONE
 
         you_rows = fetch_user_stats_rows(self._conn, user_id=user_id)
-        server_rows = fetch_guild_stats_rows(self._conn, guild_id=guild_id)
+        groove_rows = fetch_user_stats_rows(
+            self._conn, user_id=user_id, mode=SessionMode.GROOVE.value
+        )
+        server_rows = fetch_guild_stats_rows(
+            self._conn, guild_id=guild_id, mode=SessionMode.VOICE.value
+        )
 
         you_summary = compute_stats_summary(you_rows, now=now)
+        groove_summary = compute_stats_summary(groove_rows, now=now)
         server_summary = compute_stats_summary(server_rows, now=now)
 
         embed = discord.Embed(title=STATS_TITLE, color=COLORS["active"])
@@ -79,6 +92,12 @@ class StatsMixin:
             value=render_section_value(you_summary, streak_line=streak_line),
             inline=False,
         )
+        if groove_summary[2].sessions > 0:
+            embed.add_field(
+                name=STATS_SECTION_GROOVE,
+                value=render_section_value(groove_summary),
+                inline=False,
+            )
         embed.add_field(
             name=STATS_SECTION_SERVER,
             value=render_section_value(server_summary),
