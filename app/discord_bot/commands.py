@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from typing import TYPE_CHECKING
 
 import discord
@@ -276,6 +277,17 @@ class CommandsMixin:
             channel_id=channel.id,
             welcome_message_id=welcome_message.id,
         )
+        # Persisted so a restart can disable this welcome's buttons
+        # (LifecycleMixin._cleanup_crashed_sessions). Bookkeeping only.
+        try:
+            self._registry.record_welcome_message(
+                session_id=session.session_id, message_id=welcome_message.id
+            )
+        except sqlite3.Error:
+            logger.exception(
+                "Failed to record welcome message id for session %s",
+                session.session_id,
+            )
 
         # Arm the pending-expiry watchdog — cancelled once the intention is
         # submitted (see IntentionModal.on_submit).

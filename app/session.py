@@ -257,6 +257,20 @@ class SessionRegistry:
         )
         session.state = SessionState.ACTIVE
 
+    def record_welcome_message(self, *, session_id: int, message_id: int) -> None:
+        """Persist the welcome message id (for crash cleanup after a restart)."""
+        self._get_or_raise(session_id)
+        db.update_welcome_message_id(
+            self._conn, session_id=session_id, message_id=message_id
+        )
+
+    def record_timer_message(self, *, session_id: int, message_id: int) -> None:
+        """Persist the timer message id (for crash cleanup after a restart)."""
+        self._get_or_raise(session_id)
+        db.update_timer_message_id(
+            self._conn, session_id=session_id, message_id=message_id
+        )
+
     def record_participants(
         self,
         *,

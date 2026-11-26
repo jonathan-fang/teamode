@@ -54,6 +54,7 @@ CLEAR_SCAN_LIMIT = 800
 CLEAR_DELETE_INTERVAL_SECONDS = 1.0
 
 FOLLOWUP_TIMEOUT_SECONDS = 180
+CRASH_CLEANUP_INTERVAL_SECONDS = 1.0  # pause between startup cleanup edits
 SOLO_GRACE_SECONDS = 300
 EDIT_INTERVAL_SECONDS = 10  # timer embed edit cadence
 BACKOFF_FLOOR_DEFAULT = 10.0  # timer-edit backoff floor (s); doubles per 429
@@ -230,6 +231,9 @@ TIMER_CONTENT = "⏳ {mmss} remaining"
 SESSION_RECORD_INTENTION_SET = "🍵 Facilitator's Intention: {intention}"
 SESSION_RECORD_INTENTION_UNSET = "🍵 No intention set"
 SESSION_RECORD_META = "{duration} min session · Facilitated by <@{facilitator_id}>"
+# Replaces the time-range line on a timer frozen by a bot restart, and the
+# welcome content of a session that was still being set up.
+SESSION_RECORD_INTERRUPTED = "⚠️ Interrupted · Ocha restarted at {hhmm}"
 
 # ---------------------------------------------------------------------------
 # New copy — chaining and breaks (used later)
