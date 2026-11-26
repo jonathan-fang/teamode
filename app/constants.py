@@ -19,15 +19,10 @@ from __future__ import annotations
 # Tunables
 # ---------------------------------------------------------------------------
 
-DURATIONS_MINUTES: tuple[int, ...] = (
-    5,
-    10,
-    15,
-    25,
-    30,
-    50,
-    80,
-)  # 2 only allows int # smoke # 5, 10, 25, 50 what about like done by certain time? like 10:40am?
+DURATIONS_MINUTES: tuple[int, ...] = (5, 10, 25, 50)  # preset timer buttons
+# Bounds for the "Custom" timer button's minutes field (inclusive).
+CUSTOM_MIN_MINUTES = 1
+CUSTOM_MAX_MINUTES = 180
 
 RATE_LIMIT_WINDOW_SECONDS = 300
 RATE_LIMIT_ALLOWANCE = 3
@@ -139,6 +134,8 @@ WELCOME_EMBED_DESCRIPTION = (
     "### ⏳ **How long would you like to focus today?**"
 )
 TIMER_BUTTON_LABEL = "{minutes} min"
+TIMER_CUSTOM_LABEL = "Custom"
+TIMER_UNTIL_LABEL = "Until…"
 
 # ---------------------------------------------------------------------------
 # Existing copy — intention modal and active timer message (views.py)
@@ -146,6 +143,17 @@ TIMER_BUTTON_LABEL = "{minutes} min"
 
 INTENTION_MODAL_TITLE = "Set your intention"
 INTENTION_FIELD_LABEL = "What will you focus on?"
+CUSTOM_MINUTES_LABEL = "How many minutes?"
+CUSTOM_MINUTES_PLACEHOLDER = "{min}–{max}"
+MSG_CUSTOM_MINUTES_INVALID = (
+    "Enter a whole number of minutes from {min} to {max}, then click Custom again."
+)
+UNTIL_TIME_LABEL = "End at what time? (e.g. 16:30)"
+UNTIL_TIME_PLACEHOLDER = "9:50, 1150, 13:50, 4:30pm, 5:00 PM"
+MSG_UNTIL_TIME_INVALID = (
+    "Enter an end time like 9:50, 1150, 13:50, 4:30pm or 5:00 PM that is"
+    " {min}–{max} minutes from now, then click Until… again."
+)
 
 MSG_NOT_FACILITATOR = "Only the facilitator can answer."
 MSG_VOICE_CONNECT_FAILED = "Could not join voice — session cancelled."

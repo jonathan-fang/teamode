@@ -11,7 +11,20 @@
   from the member cache and voice-state events, so no extra Discord API
   calls.
 
+- **Custom timer duration.** A **Custom** button after the presets opens
+  the intention modal with a "How many minutes?" field (whole minutes,
+  1–180). An invalid value is refused ephemerally and the session stays
+  pending, so the facilitator can click Custom again. Works for `/teamode`
+  and `/groove`.
+- **Until… end-time button.** Type a local end time (`9:50`, `09:50`,
+  `1150`, `13:50`, `4:30pm`, `5:00 PM`) instead of a length; the bot computes the minutes in
+  `TEAMODE_TIMEZONE` at submit time, rounded to the nearest minute. A time
+  already past today means tomorrow; the result must be 1–180 minutes.
+
 ### Changed
+
+- **Timer presets trimmed** back to 5 / 10 / 25 / 50 min; other lengths
+  go through Custom.
 
 - **`/stats` "You" counts joined sessions.** It now includes sessions
   you joined as well as ones you facilitated; completion rate is still

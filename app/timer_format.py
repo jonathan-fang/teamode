@@ -7,7 +7,8 @@ isolation, the same way ``app/session.py`` stays Discord-free.
 
 from __future__ import annotations
 
-from datetime import datetime, tzinfo
+import re
+from datetime import datetime, timedelta, timezone, tzinfo
 
 from app.constants import (
     MSG_WRAP_UP_NUDGE,
@@ -104,3 +105,49 @@ def format_wrap_up_nudge(minutes: int) -> str:
     if minutes == 1:
         return MSG_WRAP_UP_NUDGE_ONE
     return MSG_WRAP_UP_NUDGE.format(minutes=minutes)
+
+
+_END_TIME_RE = re.compile(
+    r"^(?:(?P<h>\d{1,2}):(?P<m>\d{2})|(?P<hc>\d{1,2})(?P<mc>\d{2}))"
+    r"\s*(?P<ampm>[ap]\.?m\.?)?$"
+)
+
+
+def parse_end_time(text: str | None) -> tuple[int, int] | None:
+    """Parse a wall-clock end time into ``(hour, minute)`` (24-hour), or ``None``.
+
+    Accepts ``23:55``, ``9:05``, ``09:05``, ``0905``, ``905`` and 12-hour
+    forms with an am/pm suffix (``11:55pm``, ``11:55 PM``, ``1155p.m.``).
+    With am/pm the hour must be 1–12; without, 0–23.
+    """
+    match = _END_TIME_RE.match((text or "").strip().lower())
+    if match is None:
+        return None
+    hour = int(match["h"] or match["hc"])
+    minute = int(match["m"] or match["mc"])
+    if minute > 59:
+        return None
+    ampm = match["ampm"]
+    if ampm is None:
+        return (hour, minute) if hour <= 23 else None
+    if not 1 <= hour <= 12:
+        return None
+    hour %= 12
+    if ampm.startswith("p"):
+        hour += 12
+    return hour, minute
+
+
+def minutes_until(hour: int, minute: int, now: datetime, tz: tzinfo) -> int:
+    """Whole minutes (rounded to nearest) from *now* until the next ``hour:minute``
+    wall-clock time in *tz*.
+
+    A time at or before *now* means tomorrow. The gap is measured in UTC so a
+    DST transition in between is accounted for.
+    """
+    local_now = now.astimezone(tz)
+    target = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= local_now:
+        target = (target.replace(tzinfo=None) + timedelta(days=1)).replace(tzinfo=tz)
+    delta = target.astimezone(timezone.utc) - local_now.astimezone(timezone.utc)
+    return round(delta.total_seconds() / 60)

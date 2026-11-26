@@ -106,11 +106,14 @@ ISO-8601 UTC timestamp at the moment the timer was confirmed and started
   column is NULL.
 
 ### `duration_minutes`
-The chosen timer length: 5, 10, 25, or 50.
+The chosen timer length in whole minutes: a preset (5, 10, 25, or 50), or
+any value from 1 to 180 via the **Custom** (typed minutes) or **Until…**
+(typed end time, converted to minutes at submit) buttons.
 
 - **Type**: INTEGER.
-- **Validation**: enforced at choice-time (button options) — not a free
-  field.
+- **Validation**: enforced at choice-time — presets must be in
+  `DURATIONS_MINUTES`; Custom/Until… values must fall within
+  `CUSTOM_MIN_MINUTES`–`CUSTOM_MAX_MINUTES`.
 - **Nullable** until the facilitator picks a duration. While the row is
   in `pending` this column is NULL.
 

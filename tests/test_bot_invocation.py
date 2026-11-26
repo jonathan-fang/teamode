@@ -288,7 +288,7 @@ async def test_guard_pass_timer_button_custom_ids(
     bot: TeaModeBot,
     conn: sqlite3.Connection,
 ) -> None:
-    """Timer-pick buttons have custom_ids for 5/10/25/50 min and correct labels."""
+    """Timer-pick buttons: 5/10/25/50 min presets plus trailing Custom and Until…."""
     inter = _make_voice_interaction(channel_id=333, guild_id=222, user_id=111)
 
     with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
@@ -312,6 +312,13 @@ async def test_guard_pass_timer_button_custom_ids(
     assert "10 min" in labels
     assert "25 min" in labels
     assert "50 min" in labels
+    assert custom_ids[-2:] == [
+        f"teamode:{session_id}:timer:custom",
+        f"teamode:{session_id}:timer:until",
+    ]
+    assert labels[-2:] == ["Custom", "Until…"]
+    # Discord allows at most 5 buttons per action row; Until… wraps to row 2.
+    assert len(buttons) == 6
 
 
 # ---------------------------------------------------------------------------
