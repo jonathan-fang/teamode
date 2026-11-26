@@ -63,11 +63,18 @@ from app.discord_bot.messages import best_effort
 from app.discord_bot.tasks import spawn_logged
 from app.session import SessionMode, SessionRegistry, SessionState
 
+if TYPE_CHECKING:
+    from app.discord_bot.runtime import RuntimeStore
+
 logger = logging.getLogger(__name__)
 
 # The channel a session's messages live in: a voice channel's text chat for
 # /teamode, or (for /groove) a plain text channel or a voice channel's chat.
 SessionChannel = discord.VoiceChannel | discord.TextChannel
+
+# A voice channel as voice states report it (Stage channels included); its
+# human members are pinged at session start and counted on a leave.
+VoiceMembersChannel = discord.VoiceChannel | discord.StageChannel
 
 # ---------------------------------------------------------------------------
 # Color palette — from UI-ADR § "Color palette"
@@ -313,11 +320,7 @@ class _ModalBot(Protocol):
 
     client: discord.Client
     _registry: SessionRegistry
-    _voice_clients: dict[int, discord.VoiceClient]
-    _edit_states: dict[int, _EditState]
-    _countdown_tasks: dict[int, asyncio.Task[None]]
-    _pending_expiry_tasks: dict[int, asyncio.Task[None]]
-    _setup_messages: dict[int, _SetupMessages]
+    _rt: RuntimeStore
 
     async def _on_countdown_tick(
         self, session_id: int, seconds_remaining: int
@@ -343,8 +346,6 @@ class _ModalBot(Protocol):
     ) -> None: ...
 
     def _reset_streak(self, channel_id: int) -> None: ...
-
-    def _pop_chained_flag(self, session_id: int) -> bool: ...
 
 
 # ---------------------------------------------------------------------------
@@ -416,9 +417,10 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         )
         # The session has left PENDING — the pending-expiry watchdog no
         # longer applies.
-        expiry_task = self._bot._pending_expiry_tasks.pop(self._session_id, None)
-        if expiry_task is not None:
-            expiry_task.cancel()
+        runtime = self._bot._rt.peek_session(self._session_id)
+        if runtime is not None and runtime.pending_expiry_task is not None:
+            runtime.pending_expiry_task.cancel()
+            runtime.pending_expiry_task = None
         # Acknowledge the modal interaction without cluttering the channel.
         await interaction.response.defer(ephemeral=True)
 
@@ -428,7 +430,7 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         # welcome lives in the voice channel's text chat), never through the
         # interaction webhook. Best-effort: a failure here must not block
         # voice connect / session activation below.
-        setup = self._bot._setup_messages.get(self._session_id)
+        setup = runtime.setup if runtime is not None else None
         if setup is not None:
             await best_effort(
                 self._channel.get_partial_message(setup.welcome_message_id).edit(
@@ -463,7 +465,6 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             await interaction.followup.send(MSG_VOICE_CONNECT_FAILED, ephemeral=True)
             self._bot._registry.mark_cancelled(session_id=self._session_id)
             self._bot._reset_streak(int(session.text_channel_id))
-            self._bot._pop_chained_flag(self._session_id)
             # No voice status here: the bot never connected, and Discord
             # requires Manage Channels to set a voice status while
             # disconnected (see LifecycleMixin._set_voice_status).
@@ -471,7 +472,7 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             return
 
         # Stash the voice client so the solo-grace flow can disconnect it.
-        self._bot._voice_clients[self._session_id] = voice_client
+        self._bot._rt.session(self._session_id).voice_client = voice_client
 
         await self._activate(
             session, voice_client=voice_client, voice_channel=voice_channel
@@ -563,7 +564,7 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             )
 
         # Stash edit state so the tick callback can reach it.
-        self._bot._edit_states[self._session_id] = _EditState(
+        self._bot._rt.session(self._session_id).edit_state = _EditState(
             message=timer_message,
             mention_line=mention_line,
             started_at=started_at,
@@ -591,11 +592,13 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
                 on_tick=lambda s: self._bot._on_countdown_tick(session_id, s),
             )
             self._bot._registry.mark_followup(session_id=session_id)
-            # Clean up per-session resource dicts. _edit_states is left for
-            # _run_end_of_session to consume (it finalizes the timer message
-            # from it) and pop itself.
-            self._bot._voice_clients.pop(session_id, None)
-            self._bot._countdown_tasks.pop(session_id, None)
+            # The countdown is over. edit_state is left for
+            # _run_end_of_session to take (it finalizes the timer message
+            # from it).
+            runtime = self._bot._rt.peek_session(session_id)
+            if runtime is not None:
+                runtime.voice_client = None
+                runtime.countdown_task = None
             # Run the full end-of-session sequence.
             await self._bot._run_end_of_session(
                 session_id=session_id,
@@ -603,8 +606,9 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
                 channel=channel,
             )
 
-        task = spawn_logged(_run_and_followup(), name=f"session-followup:{session_id}")
-        self._bot._countdown_tasks[session_id] = task
+        self._bot._rt.session(session_id).countdown_task = spawn_logged(
+            _run_and_followup(), name=f"session-followup:{session_id}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -754,11 +758,7 @@ class ViewsMixin:
     # (see `_ModalBot` above) without a cast.
     client: discord.Client
     _registry: SessionRegistry
-    _voice_clients: dict[int, discord.VoiceClient]
-    _edit_states: dict[int, _EditState]
-    _countdown_tasks: dict[int, asyncio.Task[None]]
-    _pending_expiry_tasks: dict[int, asyncio.Task[None]]
-    _setup_messages: dict[int, _SetupMessages]
+    _rt: RuntimeStore
 
     if TYPE_CHECKING:
         # Methods provided by TimerMixin / LifecycleMixin at runtime — declared
@@ -789,8 +789,6 @@ class ViewsMixin:
         ) -> None: ...
 
         def _reset_streak(self, channel_id: int) -> None: ...
-
-        def _pop_chained_flag(self, session_id: int) -> bool: ...
 
     async def _handle_timer_pick(
         self,

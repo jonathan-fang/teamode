@@ -31,6 +31,7 @@ from app.db import init_db
 from app.discord_bot import TeaModeBot
 from app.discord_bot.views import COLORS
 from app.session import SessionRegistry, SessionState
+from tests.runtime_helpers import must, sess
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -101,7 +102,7 @@ async def test_pending_session_expires_and_edits_welcome(
 
     from app.discord_bot.views import _SetupMessages
 
-    bot._setup_messages[sid] = _SetupMessages(channel_id=333, welcome_message_id=999)
+    bot._rt.session(sid).setup = _SetupMessages(channel_id=333, welcome_message_id=999)
 
     await bot._run_pending_expiry(session_id=sid, sleep_seconds=0)
 
@@ -139,7 +140,7 @@ async def test_pending_expiry_task_survives_duration_pick(
 
     # Arm a real (long) expiry task, as _start_session would.
     task = asyncio.create_task(asyncio.sleep(60))
-    bot._pending_expiry_tasks[sid] = task
+    bot._rt.session(sid).pending_expiry_task = task
 
     custom_id = f"teamode:{sid}:timer:25"
     fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
@@ -154,7 +155,7 @@ async def test_pending_expiry_task_survives_duration_pick(
         ):
             await bot.on_interaction(inter)
 
-        assert bot._pending_expiry_tasks.get(sid) is task
+        assert sess(bot, sid).pending_expiry_task is task
         assert not task.cancelled()
         assert task.cancelling() == 0
     finally:
@@ -188,7 +189,7 @@ async def test_pending_expiry_fires_after_duration_pick_and_dismissed_modal(
 
     from app.discord_bot.views import _SetupMessages
 
-    bot._setup_messages[sid] = _SetupMessages(channel_id=333, welcome_message_id=999)
+    bot._rt.session(sid).setup = _SetupMessages(channel_id=333, welcome_message_id=999)
 
     await bot._run_pending_expiry(session_id=sid, sleep_seconds=0)
 
@@ -279,8 +280,7 @@ async def test_followup_watchdog_exception_is_logged(
             session_id=sid, voice_client=fake_vc, channel=fake_channel
         )
 
-    watchdog_task = bot._watchdog_tasks[sid]
-
+    watchdog_task = must(sess(bot, sid).watchdog_task)
     # Force the watchdog's own cleanup to raise, then let it fire.
     with patch.object(
         registry, "mark_followup_timeout", side_effect=RuntimeError("db down")

@@ -45,6 +45,7 @@ from app.db import init_db
 from app.discord_bot import TeaModeBot
 from app.discord_bot.breaks import _BreakState, _ChainState
 from app.session import SessionMode, SessionRegistry
+from tests.runtime_helpers import chan, must, sess
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -231,7 +232,7 @@ async def test_chain_prompt_posted_after_checkmark(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
     sid = _seed_followup_session(registry, facilitator_id=111)
-    bot._reflect_message_ids[sid] = 55555
+    bot._rt.session(sid).reflect_message_id = 55555
 
     channel = _make_fake_voice_channel(channel_id=333)
     prompt_msg = AsyncMock(spec=discord.Message)
@@ -252,7 +253,7 @@ async def test_chain_prompt_posted_after_checkmark(
     assert buttons[f"teamode:{sid}:again"].label == BUTTON_GO_AGAIN
     assert buttons[f"teamode:{sid}:break"].label == BUTTON_BREAK
 
-    chain = bot._chain_states[333]
+    chain = must(chan(bot, 333).chain)
     assert chain.session_id == sid
     assert chain.message_id == 77777
     assert chain.kind == "chain"
@@ -263,7 +264,7 @@ async def test_chain_prompt_posted_after_no_entry_following_why_line(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
     sid = _seed_followup_session(registry, facilitator_id=111)
-    bot._reflect_message_ids[sid] = 66666
+    bot._rt.session(sid).reflect_message_id = 66666
 
     channel = _make_fake_voice_channel(channel_id=333)
     why_msg = AsyncMock(spec=discord.Message)
@@ -282,7 +283,7 @@ async def test_chain_prompt_posted_after_no_entry_following_why_line(
     second_args = channel.send.call_args_list[1].args
     assert second_args[0] == CHAIN_PROMPT
 
-    chain = bot._chain_states[333]
+    chain = must(chan(bot, 333).chain)
     assert chain.session_id == sid
     assert chain.message_id == 99999
 
@@ -318,7 +319,7 @@ async def test_chain_prompt_not_posted_after_followup_timeout(
     with patch("app.discord_bot.lifecycle.asyncio.sleep", return_value=None):
         await captured[0]
 
-    assert bot._chain_states == {}
+    assert all(c.chain is None for c in bot._rt.channels.values())
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +329,9 @@ async def test_chain_prompt_not_posted_after_followup_timeout(
 
 @pytest.mark.asyncio
 async def test_go_again_routes_through_shared_start_session(bot: TeaModeBot) -> None:
-    bot._chain_states[333] = _ChainState(session_id=42, channel_id=333, message_id=1)
+    bot._rt.channel(333).chain = _ChainState(
+        session_id=42, channel_id=333, message_id=1
+    )
     inter = _make_button_interaction(42, "again", channel_id=333, user_id=999)
 
     with patch.object(bot, "_start_session", new=AsyncMock()) as mock_start:
@@ -353,7 +356,7 @@ async def test_go_again_non_facilitator_voice_member_becomes_facilitator(
     ).session_id
     registry.mark_cancelled(session_id=old_sid)  # terminal — clears guard 3
 
-    bot._chain_states[333] = _ChainState(
+    bot._rt.channel(333).chain = _ChainState(
         session_id=old_sid, channel_id=333, message_id=1
     )
     inter = _make_button_interaction(old_sid, "again", channel_id=333, user_id=999)
@@ -379,7 +382,9 @@ async def test_go_again_rate_limited_gets_refusal_and_creates_no_session(
 
     rows_before = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
 
-    bot._chain_states[999] = _ChainState(session_id=42, channel_id=999, message_id=1)
+    bot._rt.channel(999).chain = _ChainState(
+        session_id=42, channel_id=999, message_id=1
+    )
     go_inter = _make_button_interaction(
         42, "again", channel_id=999, user_id=555, user_voice_channel_id=999
     )
@@ -408,7 +413,9 @@ async def test_go_again_with_session_active_in_channel_gets_refusal(
         voice_channel_id="333",
         facilitator_id="111",
     )
-    bot._chain_states[333] = _ChainState(session_id=999, channel_id=333, message_id=1)
+    bot._rt.channel(333).chain = _ChainState(
+        session_id=999, channel_id=333, message_id=1
+    )
     inter = _make_button_interaction(999, "again", channel_id=333, user_id=222)
 
     await bot.on_interaction(inter)
@@ -431,7 +438,7 @@ async def test_go_again_no_chain_state_is_refused_as_stale(bot: TeaModeBot) -> N
 async def test_go_again_mismatched_session_id_is_refused_as_stale(
     bot: TeaModeBot,
 ) -> None:
-    bot._chain_states[333] = _ChainState(session_id=1, channel_id=333, message_id=1)
+    bot._rt.channel(333).chain = _ChainState(session_id=1, channel_id=333, message_id=1)
     inter = _make_button_interaction(2, "again", channel_id=333)
 
     await bot.on_interaction(inter)
@@ -439,7 +446,7 @@ async def test_go_again_mismatched_session_id_is_refused_as_stale(
     call_kwargs = inter.response.send_message.call_args.kwargs
     assert call_kwargs["embed"].description == MSG_SESSION_INACTIVE
     # Untouched — a stale click changes nothing.
-    assert 333 in bot._chain_states
+    assert chan(bot, 333).chain is not None
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +460,7 @@ async def test_break_posts_started_message_and_clears_chain(
 ) -> None:
     channel = _make_fake_voice_channel(channel_id=333)
     _install_fake_client(bot, channel, user_id=9)
-    bot._chain_states[333] = _ChainState(
+    bot._rt.channel(333).chain = _ChainState(
         session_id=42, channel_id=333, message_id=555, kind="chain"
     )
 
@@ -489,7 +496,7 @@ async def test_break_posts_started_message_and_clears_chain(
     assert text == BREAK_STARTED.format(hhmm=expected_hhmm)
 
     # Chain state cleared and its buttons disabled via a channel edit.
-    assert 333 not in bot._chain_states
+    assert chan(bot, 333).chain is None
     channel.get_partial_message.assert_called_once_with(555)
     fake_partial = channel.get_partial_message.return_value
     fake_partial.edit.assert_awaited_once()
@@ -497,9 +504,9 @@ async def test_break_posts_started_message_and_clears_chain(
     assert all(b.disabled for b in disabled_view.children)
 
     # Break state recorded, with the voice client connected at break start.
-    assert bot._break_states[333].session_id == 42
-    assert bot._break_states[333].message_id == 8000
-    assert bot._break_states[333].voice_client is fake_voice_client
+    assert must(chan(bot, 333).break_state).session_id == 42
+    assert must(chan(bot, 333).break_state).message_id == 8000
+    assert must(chan(bot, 333).break_state).voice_client is fake_voice_client
 
     # Ocha joins voice and shows the break status while connected.
     mock_connect.assert_awaited_once_with(channel)
@@ -519,7 +526,9 @@ async def test_break_start_voice_connect_failure_continues_without_status(
     can't join voice — just without a voice status."""
     channel = _make_fake_voice_channel(channel_id=333)
     _install_fake_client(bot, channel, user_id=9)
-    bot._chain_states[333] = _ChainState(session_id=42, channel_id=333, message_id=555)
+    bot._rt.channel(333).chain = _ChainState(
+        session_id=42, channel_id=333, message_id=555
+    )
 
     started_msg = AsyncMock(spec=discord.Message)
     started_msg.id = 8000
@@ -540,7 +549,7 @@ async def test_break_start_voice_connect_failure_continues_without_status(
 
     channel.send.assert_awaited_once()
     channel.edit.assert_not_called()
-    assert bot._break_states[333].voice_client is None
+    assert must(chan(bot, 333).break_state).voice_client is None
 
     for coro in captured:
         coro.close()
@@ -554,7 +563,9 @@ async def test_break_start_unexpected_connect_error_propagates(
     from voice.connect surfaces instead of being logged as a connect failure."""
     channel = _make_fake_voice_channel(channel_id=333)
     _install_fake_client(bot, channel, user_id=9)
-    bot._chain_states[333] = _ChainState(session_id=42, channel_id=333, message_id=555)
+    bot._rt.channel(333).chain = _ChainState(
+        session_id=42, channel_id=333, message_id=555
+    )
     started_msg = AsyncMock(spec=discord.Message)
     started_msg.id = 8000
     channel.send.return_value = started_msg
@@ -579,7 +590,9 @@ async def test_break_start_unexpected_connect_error_propagates(
 
 @pytest.mark.asyncio
 async def test_break_click_not_in_voice_is_refused(bot: TeaModeBot) -> None:
-    bot._chain_states[333] = _ChainState(session_id=42, channel_id=333, message_id=1)
+    bot._rt.channel(333).chain = _ChainState(
+        session_id=42, channel_id=333, message_id=1
+    )
     inter = _make_button_interaction(
         42, "break", channel_id=333, user_voice_channel_id=None
     )
@@ -589,7 +602,7 @@ async def test_break_click_not_in_voice_is_refused(bot: TeaModeBot) -> None:
     call_kwargs = inter.response.send_message.call_args.kwargs
     assert call_kwargs["embed"].description == MSG_NOT_IN_VOICE
     # A refused break click leaves a still-valid chain state untouched.
-    assert 333 in bot._chain_states
+    assert chan(bot, 333).chain is not None
 
 
 @pytest.mark.asyncio
@@ -614,7 +627,7 @@ async def test_teamode_during_break_cancels_it(bot: TeaModeBot) -> None:
     task = MagicMock()
     task.done = MagicMock(return_value=False)
     task.cancel = MagicMock()
-    bot._break_states[333] = _BreakState(
+    bot._rt.channel(333).break_state = _BreakState(
         task=task,
         message_id=444,
         end_time=datetime.now(timezone.utc),
@@ -629,7 +642,7 @@ async def test_teamode_during_break_cancels_it(bot: TeaModeBot) -> None:
     channel.get_partial_message.assert_called_once_with(444)
     fake_partial = channel.get_partial_message.return_value
     fake_partial.edit.assert_awaited_once_with(content=BREAK_CANCELLED)
-    assert 333 not in bot._break_states
+    assert chan(bot, 333).break_state is None
 
 
 @pytest.mark.asyncio
@@ -645,7 +658,7 @@ async def test_teamode_during_break_disconnects_break_voice_client(
     task.done = MagicMock(return_value=False)
     task.cancel = MagicMock()
     fake_break_voice_client = MagicMock(spec=discord.VoiceClient)
-    bot._break_states[333] = _BreakState(
+    bot._rt.channel(333).break_state = _BreakState(
         task=task,
         message_id=444,
         end_time=datetime.now(timezone.utc),
@@ -670,13 +683,15 @@ async def test_teamode_during_break_disconnects_break_voice_client(
 async def test_teamode_new_session_clears_stale_chain_prompt(bot: TeaModeBot) -> None:
     channel = _make_fake_voice_channel(channel_id=333)
     _install_fake_client(bot, channel, user_id=9)
-    bot._chain_states[333] = _ChainState(session_id=1, channel_id=333, message_id=555)
+    bot._rt.channel(333).chain = _ChainState(
+        session_id=1, channel_id=333, message_id=555
+    )
 
     inter = _make_voice_interaction(channel_id=333, user_id=111, channel=channel)
     with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot._start_session(inter)
 
-    assert 333 not in bot._chain_states
+    assert chan(bot, 333).chain is None
     channel.get_partial_message.assert_called_once_with(555)
     channel.get_partial_message.return_value.edit.assert_awaited_once()
 
@@ -748,7 +763,7 @@ async def test_break_completion_plays_reverie_and_posts_go_again(
     assert set(buttons) == {"teamode:42:again"}
     assert buttons["teamode:42:again"].label == BUTTON_GO_AGAIN
 
-    chain = bot._chain_states[333]
+    chain = must(chan(bot, 333).chain)
     assert chain.kind == "post_break"
     assert chain.session_id == 42
     assert chain.message_id == 9999
@@ -762,14 +777,14 @@ async def test_break_completion_plays_reverie_and_posts_go_again(
 async def test_go_again_timeout_disables_post_break_button(bot: TeaModeBot) -> None:
     channel = _make_fake_voice_channel(channel_id=333)
     _install_fake_client(bot, channel, user_id=9)
-    bot._chain_states[333] = _ChainState(
+    bot._rt.channel(333).chain = _ChainState(
         session_id=42, channel_id=333, message_id=9999, kind="post_break"
     )
 
     with patch("app.discord_bot.breaks.asyncio.sleep", new=AsyncMock()):
         await bot._run_go_again_timeout(channel_id=333)
 
-    assert 333 not in bot._chain_states
+    assert chan(bot, 333).chain is None
     channel.get_partial_message.assert_called_once_with(9999)
     disabled_view = channel.get_partial_message.return_value.edit.call_args.kwargs[
         "view"
@@ -784,7 +799,7 @@ async def test_go_again_click_before_timeout_starts_session(
     timeout_task = MagicMock()
     timeout_task.done = MagicMock(return_value=False)
     timeout_task.cancel = MagicMock()
-    bot._chain_states[333] = _ChainState(
+    bot._rt.channel(333).chain = _ChainState(
         session_id=42,
         channel_id=333,
         message_id=9999,
@@ -826,8 +841,8 @@ async def test_streak_prompt_grows_across_chained_qualifying_sessions(
     _install_fake_client(bot, channel, user_id=9)
 
     async def _finish(sid: int, msg_id: int, *, chained: bool) -> None:
-        bot._reflect_message_ids[sid] = msg_id
-        bot._chained_via_go_again[sid] = chained
+        bot._rt.session(sid).reflect_message_id = msg_id
+        bot._rt.session(sid).chained_via_go_again = chained
         payload = FakeRawReactionActionEvent(
             user_id=111, message_id=msg_id, emoji=_make_emoji("✅")
         )
@@ -858,7 +873,7 @@ async def test_streak_prompt_grows_across_chained_qualifying_sessions(
     assert set(buttons) == {f"teamode:{sid3}:again", f"teamode:{sid3}:break:long"}
     assert buttons[f"teamode:{sid3}:break:long"].label == BUTTON_LONG_BREAK
 
-    chain = bot._chain_states[333]
+    chain = must(chan(bot, 333).chain)
     assert chain.kind == "chain_streak"
 
 
@@ -875,25 +890,25 @@ async def test_streak_resets_on_short_chained_session(
     _install_fake_client(bot, channel, user_id=9)
 
     # Seed an existing 2-entry streak directly.
-    bot._streaks[333] = [25, 25]
+    bot._rt.channel(333).streak = [25, 25]
 
     sid = _seed_followup_session(registry, duration_minutes=10)
-    bot._reflect_message_ids[sid] = 9001
-    bot._chained_via_go_again[sid] = True
+    bot._rt.session(sid).reflect_message_id = 9001
+    bot._rt.session(sid).chained_via_go_again = True
     payload = FakeRawReactionActionEvent(
         user_id=111, message_id=9001, emoji=_make_emoji("✅")
     )
     await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
 
     assert channel.send.call_args.args[0] == CHAIN_PROMPT
-    assert 333 not in bot._streaks
+    assert chan(bot, 333).streak == []
 
 
 @pytest.mark.asyncio
 async def test_streak_resets_on_teamode_start(bot: TeaModeBot) -> None:
     """A plain /teamode start always restarts the channel's streak, even
     mid-streak — the Go again path does not."""
-    bot._streaks[333] = [25, 25]
+    bot._rt.channel(333).streak = [25, 25]
     channel = _make_fake_voice_channel(channel_id=333)
     _install_fake_client(bot, channel, user_id=9)
 
@@ -901,31 +916,33 @@ async def test_streak_resets_on_teamode_start(bot: TeaModeBot) -> None:
     with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot._start_session(inter)
 
-    assert 333 not in bot._streaks
+    assert chan(bot, 333).streak == []
 
 
 @pytest.mark.asyncio
 async def test_go_again_start_does_not_reset_streak(bot: TeaModeBot) -> None:
     """Unlike a plain /teamode start, Go again preserves the channel's
     in-progress streak so it can be extended at the next completion."""
-    bot._streaks[333] = [25, 25]
-    bot._chain_states[333] = _ChainState(session_id=42, channel_id=333, message_id=1)
+    bot._rt.channel(333).streak = [25, 25]
+    bot._rt.channel(333).chain = _ChainState(
+        session_id=42, channel_id=333, message_id=1
+    )
     inter = _make_button_interaction(42, "again", channel_id=333, user_id=999)
 
     with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot.on_interaction(inter)
 
-    assert bot._streaks[333] == [25, 25]
+    assert chan(bot, 333).streak == [25, 25]
 
 
 @pytest.mark.asyncio
 async def test_streak_resets_on_followup_timeout(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
-    bot._streaks[333] = [25, 25]
+    bot._rt.channel(333).streak = [25, 25]
 
     sid = _seed_followup_session(registry, duration_minutes=25)
-    bot._chained_via_go_again[sid] = True
+    bot._rt.session(sid).chained_via_go_again = True
     _install_fake_client(bot, _make_fake_voice_channel(channel_id=333), user_id=9)
 
     fake_vc = MagicMock(spec=discord.VoiceClient)
@@ -952,16 +969,16 @@ async def test_streak_resets_on_followup_timeout(
     with patch("app.discord_bot.lifecycle.asyncio.sleep", return_value=None):
         await captured[0]
 
-    assert 333 not in bot._streaks
-    assert sid not in bot._chained_via_go_again
+    assert chan(bot, 333).streak == []
+    assert not sess(bot, sid).chained_via_go_again
 
 
 @pytest.mark.asyncio
 async def test_break_start_resets_streak(bot: TeaModeBot) -> None:
-    bot._streaks[333] = [25, 25]
+    bot._rt.channel(333).streak = [25, 25]
     channel = _make_fake_voice_channel(channel_id=333)
     _install_fake_client(bot, channel, user_id=9)
-    bot._chain_states[333] = _ChainState(
+    bot._rt.channel(333).chain = _ChainState(
         session_id=42, channel_id=333, message_id=555, kind="chain_streak"
     )
     started_msg = AsyncMock(spec=discord.Message)
@@ -982,7 +999,7 @@ async def test_break_start_resets_streak(bot: TeaModeBot) -> None:
         ):
             await bot.on_interaction(inter)
 
-    assert 333 not in bot._streaks
+    assert chan(bot, 333).streak == []
 
     for coro in captured:
         coro.close()
@@ -993,7 +1010,7 @@ async def test_long_break_button_runs_long_break_minutes(bot: TeaModeBot) -> Non
     """A ``break:long`` click runs LONG_BREAK_MINUTES, not BREAK_MINUTES."""
     channel = _make_fake_voice_channel(channel_id=333)
     _install_fake_client(bot, channel, user_id=9)
-    bot._chain_states[333] = _ChainState(
+    bot._rt.channel(333).chain = _ChainState(
         session_id=42, channel_id=333, message_id=555, kind="chain_streak"
     )
     started_msg = AsyncMock(spec=discord.Message)

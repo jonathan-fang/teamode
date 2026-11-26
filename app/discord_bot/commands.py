@@ -32,8 +32,11 @@ from app.constants import (
     WELCOME_PROMPT_DELAY_SECONDS,
 )
 from app.discord_bot.messages import best_effort
+from app.discord_bot.runtime import RuntimeStore
 from app.discord_bot.views import (
     COLORS,
+    SessionChannel,
+    VoiceMembersChannel,
     _build_timer_view,
     _build_welcome_embed,
     _ChannelCleanup,
@@ -54,11 +57,7 @@ class CommandsMixin:
     tree: app_commands.CommandTree
     _registry: SessionRegistry
     _rate_limiter: RateLimiter
-    _setup_messages: dict[int, _SetupMessages]
-    _channel_cleanup: dict[int, _ChannelCleanup]
-    # Per-session record of whether it was started via Go again — see
-    # BreakMixin's module docstring.
-    _chained_via_go_again: dict[int, bool]
+    _rt: RuntimeStore
 
     if TYPE_CHECKING:
         # Provided by LifecycleMixin — declared here, type-checking only,
@@ -130,7 +129,64 @@ class CommandsMixin:
         chained from a Groove session): any text channel works, the invoker
         need not be in voice, and Ocha never joins voice.
         """
+        target = self._check_start_guards(interaction, mode)
+        if isinstance(target, str):
+            embed = discord.Embed(description=target, color=COLORS["refusal"])
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        channel, voice_channel = target
 
+        # All guards passed — create the session. A voice session's voice
+        # channel is its text channel (Guard 2); a Groove session has no
+        # voice channel, so the text channel id fills the NOT NULL column.
+        session = self._registry.create_pending_session(
+            guild_id=str(interaction.guild_id),
+            text_channel_id=str(channel.id),
+            voice_channel_id=str(channel.id),
+            facilitator_id=str(interaction.user.id),
+            mode=mode,
+        )
+        session_id = session.session_id
+
+        # Record whether this session was chained via Go again, for the
+        # streak logic in BreakMixin._post_chain_prompt. A plain /teamode
+        # start always restarts the channel's streak from scratch.
+        self._rt.session(session_id).chained_via_go_again = via_go_again
+        if not via_go_again:
+            self._reset_streak(channel.id)
+
+        await self._cleanup_previous_session_messages(channel)
+
+        # Clear any standing chain prompt (Go again / break offer) and
+        # cancel any in-progress break in this channel — a new session
+        # (this one) supersedes both. This also covers a "Go again" click,
+        # which reaches here via the same start path.
+        await self._clear_chain_state(channel.id)
+        await self._cancel_break(channel.id)
+
+        await self._post_welcome(interaction, session_id, channel)
+
+        # Arm the pending-expiry watchdog — cancelled once the intention is
+        # submitted (see IntentionModal.on_submit).
+        self._arm_pending_expiry(session_id)
+
+        # Post the participant prompt after the welcome embed. A Groove
+        # session has no voice members to ping.
+        await asyncio.sleep(WELCOME_PROMPT_DELAY_SECONDS)
+        await self._post_participant_prompt(
+            interaction,
+            session_id,
+            voice_channel if mode == SessionMode.VOICE else None,
+        )
+
+    def _check_start_guards(
+        self, interaction: discord.Interaction, mode: SessionMode
+    ) -> tuple[SessionChannel, VoiceMembersChannel | None] | str:
+        """Run the session-start guards, then the rate limit.
+
+        Returns the session's channel and the invoker's voice channel (when
+        they are in this one), or the refusal text when a check fails.
+        """
         # Guard 1 — /teamode must be invoked from a voice channel's text
         # chat. In discord.py, a voice channel's text-chat surface shares
         # the VoiceChannel's channel id; interaction.channel is a
@@ -142,12 +198,7 @@ class CommandsMixin:
             else (discord.VoiceChannel,)
         )
         if not isinstance(channel, allowed):
-            embed = discord.Embed(
-                description=MSG_WRONG_CHANNEL,
-                color=COLORS["refusal"],
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+            return MSG_WRONG_CHANNEL
 
         # Guard 2 — /teamode's invoker must be in the voice channel.
         user = interaction.user
@@ -160,22 +211,11 @@ class CommandsMixin:
             else None
         )
         if mode == SessionMode.VOICE and voice_channel is None:
-            embed = discord.Embed(
-                description=MSG_NOT_IN_VOICE,
-                color=COLORS["refusal"],
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+            return MSG_NOT_IN_VOICE
 
         # Guard 3 — no active session in this text channel.
-        existing = self._registry.find_active_in_text_channel(str(channel.id))
-        if existing is not None:
-            embed = discord.Embed(
-                description=MSG_SESSION_ACTIVE,
-                color=COLORS["refusal"],
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+        if self._registry.find_active_in_text_channel(str(channel.id)) is not None:
+            return MSG_SESSION_ACTIVE
 
         # Rate limit — only invocations that passed the guards above count,
         # so a mistyped channel or an absent voice join doesn't burn the
@@ -192,88 +232,69 @@ class CommandsMixin:
                     interaction.user.id,
                     rate_result.retry_after_seconds,
                 )
-                description = MSG_RATE_LIMIT_USER.format(
+                return MSG_RATE_LIMIT_USER.format(
                     seconds=rate_result.retry_after_seconds
                 )
-            else:
-                logger.info(
-                    "Rate limit refusal (guild) — guild_id=%s",
-                    interaction.guild_id,
-                )
-                description = MSG_RATE_LIMIT_GUILD.format(cap=GUILD_DAILY_CAP)
-            embed = discord.Embed(
-                description=description,
-                color=COLORS["refusal"],
+            logger.info(
+                "Rate limit refusal (guild) — guild_id=%s",
+                interaction.guild_id,
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
+            return MSG_RATE_LIMIT_GUILD.format(cap=GUILD_DAILY_CAP)
 
-        # All guards passed — create the session. A voice session's voice
-        # channel is its text channel (Guard 2); a Groove session has no
-        # voice channel, so the text channel id fills the NOT NULL column.
-        session = self._registry.create_pending_session(
-            guild_id=str(interaction.guild_id),
-            text_channel_id=str(channel.id),
-            voice_channel_id=str(channel.id),
-            facilitator_id=str(interaction.user.id),
-            mode=mode,
+        return channel, voice_channel
+
+    async def _cleanup_previous_session_messages(self, channel: SessionChannel) -> None:
+        """Delete or strip the previous session's leftover messages in *channel*.
+
+        Each step is independent and best-effort: a failure is logged and
+        does not block the others or the new session.
+        """
+        channel_runtime = self._rt.channel(channel.id)
+        previous_cleanup, channel_runtime.cleanup = (
+            channel_runtime.cleanup,
+            _ChannelCleanup(),
         )
-
-        # Record whether this session was chained via Go again, for the
-        # streak logic in BreakMixin._post_chain_prompt. A plain /teamode
-        # start always restarts the channel's streak from scratch.
-        self._chained_via_go_again[session.session_id] = via_go_again
-        if not via_go_again:
-            self._reset_streak(channel.id)
-
-        # Clean up the previous session's leftover messages in this channel,
-        # if any — this also covers a future "Go again" button reusing this
-        # same start path. Each step is independent and best-effort: a
-        # failure is logged and does not block the others or the new session.
-        previous_cleanup = self._channel_cleanup.pop(channel.id, None)
-        if previous_cleanup is not None:
-            for message_id, what in (
-                (previous_cleanup.times_up_id, "Time's up message"),
-                (previous_cleanup.why_id, "follow-up why message"),
-                (previous_cleanup.ping_id, "Groove ping message"),
-            ):
-                if message_id is not None:
-                    await best_effort(
-                        channel.get_partial_message(message_id).delete(),
-                        logger,
-                        "Failed to delete previous %s %s in channel %s",
-                        what,
-                        message_id,
-                        channel.id,
-                    )
-            if previous_cleanup.reflect_id is not None:
+        for message_id, what in (
+            (previous_cleanup.times_up_id, "Time's up message"),
+            (previous_cleanup.why_id, "follow-up why message"),
+            (previous_cleanup.ping_id, "Groove ping message"),
+        ):
+            if message_id is not None:
                 await best_effort(
-                    channel.get_partial_message(previous_cleanup.reflect_id).edit(
-                        embed=None
-                    ),
+                    channel.get_partial_message(message_id).delete(),
                     logger,
-                    "Failed to strip embed from previous Reflect message %s"
-                    " in channel %s",
-                    previous_cleanup.reflect_id,
+                    "Failed to delete previous %s %s in channel %s",
+                    what,
+                    message_id,
                     channel.id,
                 )
+        if previous_cleanup.reflect_id is not None:
+            await best_effort(
+                channel.get_partial_message(previous_cleanup.reflect_id).edit(
+                    embed=None
+                ),
+                logger,
+                "Failed to strip embed from previous Reflect message %s in channel %s",
+                previous_cleanup.reflect_id,
+                channel.id,
+            )
 
-        # Clear any standing chain prompt (Go again / break offer) and
-        # cancel any in-progress break in this channel — a new session
-        # (this one) supersedes both. This also covers a "Go again" click,
-        # which reaches here via the same start path.
-        await self._clear_chain_state(channel.id)
-        await self._cancel_break(channel.id)
-
+    async def _post_welcome(
+        self,
+        interaction: discord.Interaction,
+        session_id: int,
+        channel: SessionChannel,
+    ) -> None:
+        """Post the welcome embed with its duration buttons, and record its id."""
         await interaction.response.send_message(
-            embed=_build_welcome_embed(), view=_build_timer_view(session.session_id)
+            embed=_build_welcome_embed(), view=_build_timer_view(session_id)
         )
 
         # Capture the welcome message id — all later edits/deletes go
         # through the channel, never through the interaction webhook, since
         # interaction tokens expire well before a session ends.
         welcome_message = await interaction.original_response()
-        self._setup_messages[session.session_id] = _SetupMessages(
+        self._rt.session(session_id).setup = _SetupMessages(
             channel_id=channel.id,
             welcome_message_id=welcome_message.id,
         )
@@ -281,27 +302,25 @@ class CommandsMixin:
         # (LifecycleMixin._cleanup_crashed_sessions). Bookkeeping only.
         try:
             self._registry.record_welcome_message(
-                session_id=session.session_id, message_id=welcome_message.id
+                session_id=session_id, message_id=welcome_message.id
             )
         except sqlite3.Error:
             logger.exception(
-                "Failed to record welcome message id for session %s",
-                session.session_id,
+                "Failed to record welcome message id for session %s", session_id
             )
 
-        # Arm the pending-expiry watchdog — cancelled once the intention is
-        # submitted (see IntentionModal.on_submit).
-        self._arm_pending_expiry(session.session_id)
-
-        # Post the participant prompt after the welcome embed.
-        await asyncio.sleep(WELCOME_PROMPT_DELAY_SECONDS)
-
-        # Snapshot voice members, filter the bot itself. A Groove session
-        # has no voice members to ping.
+    async def _post_participant_prompt(
+        self,
+        interaction: discord.Interaction,
+        session_id: int,
+        voice_channel: VoiceMembersChannel | None,
+    ) -> None:
+        """Post the public Set-Intention prompt, pinging *voice_channel*'s
+        human members (``None`` pings nobody), and record its id."""
         bot_id = self.client.user.id if self.client.user else None
         members = (
             [m for m in voice_channel.members if not m.bot and m.id != bot_id]
-            if mode == SessionMode.VOICE and voice_channel is not None
+            if voice_channel is not None
             else []
         )
         if members:
@@ -314,9 +333,9 @@ class CommandsMixin:
         intention_message = await interaction.followup.send(
             participant_prompt, ephemeral=False, wait=True
         )
-        setup = self._setup_messages.get(session.session_id)
-        if setup is not None:
-            setup.intention_message_id = intention_message.id
+        runtime = self._rt.peek_session(session_id)
+        if runtime is not None and runtime.setup is not None:
+            runtime.setup.intention_message_id = intention_message.id
 
     async def _handle_handoff(
         self, interaction: discord.Interaction, member: discord.Member

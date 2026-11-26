@@ -12,20 +12,19 @@ there, either button offered by that prompt is handled here:
   voice status; on completion Ocha plays the reverie, leaves, and posts a
   fresh chaining prompt with just a Go again button (with its own expiry).
 
-**Streak tracking**: :data:`_streaks` holds, per text channel, the
+**Streak tracking**: ``ChannelRuntime.streak`` holds, per text channel, the
 durations of consecutive qualifying sessions (each at least
 ``LONG_BREAK_MIN_SESSION_MINUTES`` minutes, ending with a facilitator ✅ or
 ⛔, and — after the first — started via Go again). Once the streak reaches
 ``LONG_BREAK_STREAK`` entries, :meth:`_post_chain_prompt` offers a
 ten-minute break (:data:`CHAIN_PROMPT_STREAK`) instead of the normal
-five-minute offer. :data:`_chained_via_go_again` records, per session,
-whether it was started via Go again — read once (and popped) by
+five-minute offer. ``SessionRuntime.chained_via_go_again`` records, per
+session, whether it was started via Go again — passed to
 ``_post_chain_prompt`` to decide whether to extend or restart the streak.
-Both are in-memory only and reset per :meth:`_reset_streak` /
-:meth:`_pop_chained_flag`'s callers: a break starting, a session started
-via ``/teamode``, a session shorter than the threshold, a follow-up
-timeout, or a session cancellation (solo grace, voice-connect failure,
-pending expiry).
+Both are in-memory only. The streak is reset per :meth:`_reset_streak`'s
+callers: a break starting, a session started via ``/teamode``, a session
+shorter than the threshold, a follow-up timeout, or a session cancellation
+(solo grace, voice-connect failure, pending expiry).
 
 Both the chaining prompt and the break are in-memory, per text-channel
 state — lost on restart, and cleared whenever a break starts or a new
@@ -70,6 +69,9 @@ from app.discord_bot.messages import best_effort
 from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.views import SessionChannel, _now, _send_refusal
 from app.session import SessionMode, SessionRegistry
+
+if TYPE_CHECKING:
+    from app.discord_bot.runtime import RuntimeStore
 
 logger = logging.getLogger(__name__)
 
@@ -213,14 +215,7 @@ class BreakMixin:
     # can type-check this mixin's own methods in isolation.
     client: discord.Client
     _registry: SessionRegistry
-    _chain_states: dict[int, _ChainState]
-    _break_states: dict[int, _BreakState]
-    # Per-channel streak of chained, qualifying session durations — see the
-    # module docstring. Reset by _reset_streak; extended by _post_chain_prompt.
-    _streaks: dict[int, list[int]]
-    # Per-session record of whether it was started via Go again — read once
-    # (and popped) by _post_chain_prompt via _pop_chained_flag.
-    _chained_via_go_again: dict[int, bool]
+    _rt: RuntimeStore
 
     if TYPE_CHECKING:
         # Provided by CommandsMixin — declared here, type-checking only.
@@ -241,8 +236,13 @@ class BreakMixin:
     # Chaining prompt
     # ------------------------------------------------------------------
 
-    async def _post_chain_prompt(self, session_id: int, text_channel_id: str) -> None:
+    async def _post_chain_prompt(
+        self, session_id: int, text_channel_id: str, *, chained: bool
+    ) -> None:
         """Post the Go again / break offer prompt for *session_id*.
+
+        *chained* is whether the session was started via Go again (read from
+        its runtime before the session's terminal cleanup dropped it).
 
         Called after a facilitator ✅ or ⛔ is processed (after the ⛔ "why"
         line, when present) — never after a follow-up timeout. Updates the
@@ -266,18 +266,18 @@ class BreakMixin:
 
         session = self._registry.get(session_id)
         duration = session.duration_minutes if session is not None else None
-        chained = self._pop_chained_flag(session_id)
         qualifies = duration is not None and duration >= LONG_BREAK_MIN_SESSION_MINUTES
 
+        channel_runtime = self._rt.channel(channel_id)
         if not chained:
-            self._streaks.pop(channel_id, None)
+            channel_runtime.streak = []
         if qualifies:
             assert duration is not None  # narrowed by `qualifies` above
-            self._streaks.setdefault(channel_id, []).append(duration)
+            channel_runtime.streak.append(duration)
         else:
-            self._streaks.pop(channel_id, None)
+            channel_runtime.streak = []
 
-        streak = self._streaks.get(channel_id, [])
+        streak = channel_runtime.streak
         kind: Literal["chain", "chain_streak"]
         if len(streak) >= LONG_BREAK_STREAK:
             text = CHAIN_PROMPT_STREAK.format(
@@ -302,7 +302,7 @@ class BreakMixin:
                 channel_id,
             )
             return
-        self._chain_states[channel_id] = _ChainState(
+        channel_runtime.chain = _ChainState(
             session_id=session_id,
             channel_id=channel_id,
             message_id=message.id,
@@ -318,21 +318,38 @@ class BreakMixin:
         session resets the streak inline in :meth:`_post_chain_prompt`
         instead, since that path also needs to seed the fresh streak.
         """
-        self._streaks.pop(channel_id, None)
-
-    def _pop_chained_flag(self, session_id: int) -> bool:
-        """Pop and return whether *session_id* was started via Go again.
-
-        Defaults to ``False`` (a plain ``/teamode`` start, or a session id
-        this bot instance never recorded — e.g. after a restart).
-        """
-        return self._chained_via_go_again.pop(session_id, False)
+        channel_runtime = self._rt.peek_channel(channel_id)
+        if channel_runtime is not None:
+            channel_runtime.streak = []
 
     def _session_mode(self, session_id: int) -> SessionMode:
         """Return *session_id*'s mode, defaulting to voice if it is unknown
         (e.g. after a restart)."""
         session = self._registry.get(session_id)
         return session.mode if session is not None else SessionMode.VOICE
+
+    def _standing_chain(self, channel_id: int | None) -> _ChainState | None:
+        """Return the chain prompt standing in *channel_id*, if any."""
+        if channel_id is None:
+            return None
+        channel_runtime = self._rt.peek_channel(channel_id)
+        return channel_runtime.chain if channel_runtime is not None else None
+
+    def _pop_chain(self, channel_id: int) -> _ChainState | None:
+        """Remove and return the chain prompt standing in *channel_id*."""
+        channel_runtime = self._rt.peek_channel(channel_id)
+        if channel_runtime is None:
+            return None
+        chain, channel_runtime.chain = channel_runtime.chain, None
+        return chain
+
+    def _pop_break(self, channel_id: int) -> _BreakState | None:
+        """Remove and return the break in progress in *channel_id*."""
+        channel_runtime = self._rt.peek_channel(channel_id)
+        if channel_runtime is None:
+            return None
+        break_state, channel_runtime.break_state = channel_runtime.break_state, None
+        return break_state
 
     async def _disable_chain_message(self, chain: _ChainState) -> None:
         """Edit *chain*'s message to an all-disabled button row.
@@ -370,7 +387,7 @@ class BreakMixin:
         this channel. Not used by the expiry watchdog itself — it pops and
         disables directly to avoid cancelling its own running task.
         """
-        chain = self._chain_states.pop(channel_id, None)
+        chain = self._pop_chain(channel_id)
         if chain is None:
             return
         if chain.timeout_task is not None and not chain.timeout_task.done():
@@ -396,8 +413,7 @@ class BreakMixin:
         guarded path as ``/teamode`` — or ``/groove``, when the finished
         session was a Groove one.
         """
-        channel_id = interaction.channel_id
-        chain = self._chain_states.get(channel_id) if channel_id is not None else None
+        chain = self._standing_chain(interaction.channel_id)
         if chain is None or chain.session_id != session_id:
             await _send_refusal(interaction, MSG_SESSION_INACTIVE)
             return
@@ -422,8 +438,7 @@ class BreakMixin:
         streak, and Ocha joins voice for its duration (see the module
         docstring and ``_run_break``).
         """
-        channel_id = interaction.channel_id
-        chain = self._chain_states.get(channel_id) if channel_id is not None else None
+        chain = self._standing_chain(interaction.channel_id)
         if chain is None or chain.session_id != session_id:
             await _send_refusal(interaction, MSG_SESSION_INACTIVE)
             return
@@ -493,7 +508,7 @@ class BreakMixin:
             ),
             name=f"break:{channel_id}",
         )
-        self._break_states[channel_id] = _BreakState(
+        self._rt.channel(channel_id).break_state = _BreakState(
             task=task,
             message_id=break_message.id,
             end_time=end_time,
@@ -533,7 +548,7 @@ class BreakMixin:
         status is set before reverie playback so it is visible for the
         whole disconnect sequence.
 
-        Cancelled (via ``_break_states[channel_id].task.cancel()``) when a
+        Cancelled (via ``ChannelRuntime.break_state``) when a
         new session starts in this channel — see
         ``CommandsMixin._start_session`` / ``_cancel_break``.
         """
@@ -542,7 +557,7 @@ class BreakMixin:
         except asyncio.CancelledError:
             return
 
-        self._break_states.pop(channel_id, None)
+        self._pop_break(channel_id)
         logger.info("Break ended in channel %s for session %s", channel_id, session_id)
 
         if mode == SessionMode.GROOVE:
@@ -594,7 +609,7 @@ class BreakMixin:
             self._run_go_again_timeout(channel_id=channel_id),
             name=f"go-again-timeout:{channel_id}",
         )
-        self._chain_states[channel_id] = _ChainState(
+        self._rt.channel(channel_id).chain = _ChainState(
             session_id=session_id,
             channel_id=channel_id,
             message_id=over_message.id,
@@ -614,7 +629,7 @@ class BreakMixin:
         except asyncio.CancelledError:
             return
 
-        chain = self._chain_states.pop(channel_id, None)
+        chain = self._pop_chain(channel_id)
         if chain is None:
             return
         await self._disable_chain_message(chain)
@@ -631,7 +646,7 @@ class BreakMixin:
         starts in this channel (``/teamode`` or Go again) — see
         ``CommandsMixin._start_session``.
         """
-        break_state = self._break_states.pop(channel_id, None)
+        break_state = self._pop_break(channel_id)
         if break_state is None:
             return
         if not break_state.task.done():

@@ -36,6 +36,7 @@ from app.discord_bot.views import (
     _SetupMessages,
 )
 from app.session import SessionRegistry, SessionState
+from tests.runtime_helpers import chan, must, sess
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -92,7 +93,7 @@ def _seed_with_setup_messages(
         facilitator_id="111",
     )
     sid = session.session_id
-    bot._setup_messages[sid] = _SetupMessages(
+    bot._rt.session(sid).setup = _SetupMessages(
         channel_id=channel_id,
         welcome_message_id=welcome_id,
         intention_message_id=intention_id,
@@ -131,7 +132,7 @@ async def test_completed_checkmark_deletes_setup_messages(
     registry.mark_active(session_id=sid)
     registry.mark_followup(session_id=sid)
 
-    bot._reflect_message_ids[sid] = 999
+    bot._rt.session(sid).reflect_message_id = 999
     fake_channel, fake_partial = _make_fake_channel()
     _install_fake_client(bot, fake_channel)
 
@@ -145,7 +146,7 @@ async def test_completed_checkmark_deletes_setup_messages(
         ((200,),),
     ]
     assert fake_partial.delete.await_count == 2
-    assert sid not in bot._setup_messages
+    assert sess(bot, sid).setup is None
 
 
 @pytest.mark.asyncio
@@ -161,7 +162,7 @@ async def test_completed_checkmark_deletes_nudge_message_when_it_fired(
     registry.mark_active(session_id=sid)
     registry.mark_followup(session_id=sid)
 
-    bot._reflect_message_ids[sid] = 999
+    bot._rt.session(sid).reflect_message_id = 999
     fake_channel, fake_partial = _make_fake_channel()
     _install_fake_client(bot, fake_channel)
 
@@ -176,7 +177,7 @@ async def test_completed_checkmark_deletes_nudge_message_when_it_fired(
         ((300,),),
     ]
     assert fake_partial.delete.await_count == 3
-    assert sid not in bot._setup_messages
+    assert sess(bot, sid).setup is None
 
 
 @pytest.mark.asyncio
@@ -189,7 +190,7 @@ async def test_completed_no_entry_deletes_setup_messages(
     registry.mark_active(session_id=sid)
     registry.mark_followup(session_id=sid)
 
-    bot._reflect_message_ids[sid] = 999
+    bot._rt.session(sid).reflect_message_id = 999
     fake_channel, fake_partial = _make_fake_channel()
     fake_client = _install_fake_client(bot, fake_channel)
     # get_channel is used both for _on_session_terminal and the "why" prompt.
@@ -201,7 +202,7 @@ async def test_completed_no_entry_deletes_setup_messages(
     await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
 
     assert fake_partial.delete.await_count == 2
-    assert sid not in bot._setup_messages
+    assert sess(bot, sid).setup is None
 
 
 @pytest.mark.asyncio
@@ -232,12 +233,12 @@ async def test_followup_timeout_deletes_setup_messages(
             channel=fake_send_channel,
         )
 
-    watchdog_task = bot._watchdog_tasks[sid]
+    watchdog_task = must(sess(bot, sid).watchdog_task)
     with patch("app.discord_bot.lifecycle.asyncio.sleep", return_value=None):
         await watchdog_task
 
     assert fake_partial.delete.await_count == 2
-    assert sid not in bot._setup_messages
+    assert sess(bot, sid).setup is None
 
 
 @pytest.mark.asyncio
@@ -257,7 +258,9 @@ async def test_end_of_session_finalizes_timer_message_to_plain_text_record(
 
     fake_timer_msg = AsyncMock(spec=discord.Message)
     started_at = datetime(2026, 9, 30, 14, 0, tzinfo=timezone.utc)
-    bot._edit_states[sid] = _EditState(message=fake_timer_msg, started_at=started_at)
+    bot._rt.session(sid).edit_state = _EditState(
+        message=fake_timer_msg, started_at=started_at
+    )
 
     fake_send_channel = AsyncMock()
     fake_reflect_msg = AsyncMock(spec=discord.Message)
@@ -284,7 +287,7 @@ async def test_end_of_session_finalizes_timer_message_to_plain_text_record(
     call_kwargs = fake_timer_msg.edit.call_args.kwargs
     assert call_kwargs["content"] == expected_content
     assert call_kwargs["embed"] is None
-    assert sid not in bot._edit_states
+    assert sess(bot, sid).edit_state is None
 
 
 @pytest.mark.asyncio
@@ -299,7 +302,9 @@ async def test_solo_grace_timeout_deletes_setup_messages(
     fake_channel, fake_partial = _make_fake_channel()
     _install_fake_client(bot, fake_channel)
 
-    bot._edit_states[sid] = _EditState(message=AsyncMock(spec=discord.Message))
+    bot._rt.session(sid).edit_state = _EditState(
+        message=AsyncMock(spec=discord.Message)
+    )
 
     await bot._run_solo_grace(session_id=sid, sleep_seconds=0)
 
@@ -307,7 +312,7 @@ async def test_solo_grace_timeout_deletes_setup_messages(
     assert session is not None
     assert session.state == SessionState.CANCELLED
     assert fake_partial.delete.await_count == 2
-    assert sid not in bot._setup_messages
+    assert sess(bot, sid).setup is None
 
 
 @pytest.mark.asyncio
@@ -339,7 +344,7 @@ async def test_voice_connect_failure_deletes_setup_messages(
     assert session is not None
     assert session.state == SessionState.CANCELLED
     assert fake_partial.delete.await_count == 2
-    assert sid not in bot._setup_messages
+    assert sess(bot, sid).setup is None
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +366,8 @@ async def test_pending_expiry_does_not_delete_setup_messages(
     # delete either message.
     assert fake_channel.get_partial_message.call_count == 1
     fake_partial.delete.assert_not_awaited()
-    assert sid in bot._setup_messages
+    # The session's runtime (setup ids included) is still dropped.
+    assert sid not in bot._rt.sessions
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +389,9 @@ async def test_delete_failure_logged_as_warning(
     fake_channel, fake_partial = _make_fake_channel()
     fake_partial.delete = AsyncMock(side_effect=discord.NotFound(MagicMock(), "gone"))
     _install_fake_client(bot, fake_channel)
-    bot._edit_states[sid] = _EditState(message=AsyncMock(spec=discord.Message))
+    bot._rt.session(sid).edit_state = _EditState(
+        message=AsyncMock(spec=discord.Message)
+    )
 
     with caplog.at_level(logging.WARNING, logger="app.discord_bot.lifecycle"):
         await bot._run_solo_grace(session_id=sid, sleep_seconds=0)
@@ -421,7 +429,9 @@ async def test_nudge_delete_failure_logged_as_warning_and_flow_continues(
     fake_channel = MagicMock(spec=discord.VoiceChannel)
     fake_channel.get_partial_message = MagicMock(side_effect=_get_partial)
     _install_fake_client(bot, fake_channel)
-    bot._edit_states[sid] = _EditState(message=AsyncMock(spec=discord.Message))
+    bot._rt.session(sid).edit_state = _EditState(
+        message=AsyncMock(spec=discord.Message)
+    )
 
     with caplog.at_level(logging.WARNING, logger="app.discord_bot.lifecycle"):
         await bot._run_solo_grace(session_id=sid, sleep_seconds=0)
@@ -434,7 +444,7 @@ async def test_nudge_delete_failure_logged_as_warning_and_flow_continues(
     session = registry.get(sid)
     assert session is not None
     assert session.state == SessionState.CANCELLED
-    assert sid not in bot._setup_messages
+    assert sess(bot, sid).setup is None
 
 
 # ---------------------------------------------------------------------------
@@ -475,14 +485,14 @@ async def test_previous_times_up_deleted_on_next_session_start(
     inter.channel = fake_channel
     inter.channel.id = 333
 
-    bot._channel_cleanup[333] = _ChannelCleanup(times_up_id=5555)
+    bot._rt.channel(333).cleanup = _ChannelCleanup(times_up_id=5555)
 
     with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot._handle_teamode(inter)
 
     fake_channel.get_partial_message.assert_any_call(5555)
     fake_partial.delete.assert_awaited_once()
-    assert 333 not in bot._channel_cleanup
+    assert chan(bot, 333).cleanup == _ChannelCleanup()
 
 
 @pytest.mark.asyncio
@@ -504,7 +514,7 @@ async def test_previous_why_and_reflect_cleaned_up_on_next_session_start(
     inter.channel = fake_channel
     inter.channel.id = 333
 
-    bot._channel_cleanup[333] = _ChannelCleanup(
+    bot._rt.channel(333).cleanup = _ChannelCleanup(
         times_up_id=5555, reflect_id=6666, why_id=7777
     )
 
@@ -514,7 +524,7 @@ async def test_previous_why_and_reflect_cleaned_up_on_next_session_start(
     fake_partials[5555].delete.assert_awaited_once()
     fake_partials[7777].delete.assert_awaited_once()
     fake_partials[6666].edit.assert_awaited_once_with(embed=None)
-    assert 333 not in bot._channel_cleanup
+    assert chan(bot, 333).cleanup == _ChannelCleanup()
 
 
 @pytest.mark.asyncio
@@ -535,7 +545,7 @@ async def test_no_why_line_only_times_up_and_reflect_handled(
     inter.channel = fake_channel
     inter.channel.id = 333
 
-    bot._channel_cleanup[333] = _ChannelCleanup(times_up_id=5555, reflect_id=6666)
+    bot._rt.channel(333).cleanup = _ChannelCleanup(times_up_id=5555, reflect_id=6666)
 
     with patch("app.discord_bot.commands.asyncio.sleep", new=AsyncMock()):
         await bot._handle_teamode(inter)
@@ -543,7 +553,7 @@ async def test_no_why_line_only_times_up_and_reflect_handled(
     fake_partials[5555].delete.assert_awaited_once()
     fake_partials[6666].edit.assert_awaited_once_with(embed=None)
     assert 7777 not in fake_partials
-    assert 333 not in bot._channel_cleanup
+    assert chan(bot, 333).cleanup == _ChannelCleanup()
 
 
 @pytest.mark.asyncio
@@ -569,7 +579,7 @@ async def test_channel_cleanup_failures_logged_as_warning_and_flow_continues(
     inter.channel = fake_channel
     inter.channel.id = 333
 
-    bot._channel_cleanup[333] = _ChannelCleanup(
+    bot._rt.channel(333).cleanup = _ChannelCleanup(
         times_up_id=5555, reflect_id=6666, why_id=7777
     )
 
@@ -592,7 +602,7 @@ async def test_channel_cleanup_failures_logged_as_warning_and_flow_continues(
         for r in caplog.records
     )
     # The new session still started (cleanup entry cleared regardless).
-    assert 333 not in bot._channel_cleanup
+    assert chan(bot, 333).cleanup == _ChannelCleanup()
 
 
 # ---------------------------------------------------------------------------
@@ -651,7 +661,7 @@ async def test_initial_timer_send_includes_non_bot_mentions(
     assert "<@501>" in sent_content
     assert "<@1>" not in sent_content
 
-    edit_state = bot._edit_states[sid]
+    edit_state = must(sess(bot, sid).edit_state)
     assert edit_state.mention_line == "<@501>"
 
 
@@ -671,7 +681,9 @@ async def test_tick_edit_reuses_mention_line_without_reping(
     registry.mark_active(session_id=sid)
 
     fake_msg = AsyncMock(spec=discord.Message)
-    bot._edit_states[sid] = _EditState(message=fake_msg, mention_line="<@501>")
+    bot._rt.session(sid).edit_state = _EditState(
+        message=fake_msg, mention_line="<@501>"
+    )
 
     await bot._on_countdown_tick(sid, seconds_remaining=30)
 
@@ -713,7 +725,7 @@ async def test_participant_prompt_message_id_captured(bot: TeaModeBot) -> None:
     assert inter.followup.send.call_args.kwargs.get("wait") is True
 
     cur = None
-    for sid, setup in bot._setup_messages.items():
-        cur = setup
+    for runtime in bot._rt.sessions.values():
+        cur = runtime.setup
     assert cur is not None
     assert cur.intention_message_id == 7777

@@ -22,6 +22,7 @@ from app.discord_bot import TeaModeBot
 from app.discord_bot.views import COLORS, _EditState
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
+from tests.runtime_helpers import must, sess
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +164,9 @@ async def test_solo_grace_timeout_cancels_session(
     fake_vc = _make_fake_voice_client()
     edit_state = _make_edit_state()
 
-    bot._countdown_tasks[sid] = countdown_coro_task
-    bot._voice_clients[sid] = fake_vc  # type: ignore[assignment]
-    bot._edit_states[sid] = edit_state
+    bot._rt.session(sid).countdown_task = countdown_coro_task
+    bot._rt.session(sid).voice_client = fake_vc  # type: ignore[assignment]
+    bot._rt.session(sid).edit_state = edit_state
 
     with patch(
         "app.discord_bot.lifecycle.voice.disconnect", new_callable=AsyncMock
@@ -197,10 +198,10 @@ async def test_solo_grace_timeout_cancels_session(
     assert row[0] == "cancelled"
 
     # All three per-session dicts no longer contain the session_id.
-    assert sid not in bot._edit_states
-    assert sid not in bot._voice_clients
-    assert sid not in bot._countdown_tasks
-    assert sid not in bot._solo_grace_tasks
+    assert sess(bot, sid).edit_state is None
+    assert sess(bot, sid).voice_client is None
+    assert sess(bot, sid).countdown_task is None
+    assert sess(bot, sid).solo_grace_task is None
 
 
 @pytest.mark.asyncio
@@ -241,8 +242,8 @@ async def test_solo_grace_edit_failure_does_not_block_cancellation(
         side_effect=discord.HTTPException(MagicMock(), "rate limited")
     )
 
-    bot._voice_clients[sid] = fake_vc  # type: ignore[assignment]
-    bot._edit_states[sid] = edit_state
+    bot._rt.session(sid).voice_client = fake_vc  # type: ignore[assignment]
+    bot._rt.session(sid).edit_state = edit_state
 
     with patch(
         "app.discord_bot.lifecycle.voice.disconnect", new_callable=AsyncMock
@@ -310,12 +311,14 @@ async def test_solo_leave_arms_watchdog(
         await bot.on_voice_state_update(facilitator, before, after)
 
     # Watchdog was armed.
-    assert sid in bot._solo_grace_tasks
+    assert sess(bot, sid).solo_grace_task is not None
 
     # Clean up: cancel the armed task.
-    bot._solo_grace_tasks[sid].cancel()
+    grace_task = must(sess(bot, sid).solo_grace_task)
+    assert grace_task is not None
+    grace_task.cancel()
     try:
-        await bot._solo_grace_tasks.pop(sid)
+        await grace_task
     except (asyncio.CancelledError, Exception):
         pass
 
@@ -332,7 +335,7 @@ async def test_facilitator_rejoins_cancels_watchdog(
 
     # Manually arm a watchdog with a real (long) sleep task.
     grace_task = asyncio.create_task(asyncio.sleep(60))
-    bot._solo_grace_tasks[sid] = grace_task
+    bot._rt.session(sid).solo_grace_task = grace_task
 
     _install_fake_client_user(bot, user_id=999)
 
@@ -350,7 +353,7 @@ async def test_facilitator_rejoins_cancels_watchdog(
     assert grace_task.cancelled()
 
     # Watchdog removed from the dict.
-    assert sid not in bot._solo_grace_tasks
+    assert sess(bot, sid).solo_grace_task is None
 
 
 @pytest.mark.asyncio
@@ -362,7 +365,7 @@ async def test_different_user_rejoins_does_not_cancel_watchdog(
     sid = _seed_active_session(registry, voice_channel_id="444", facilitator_id="111")
 
     grace_task = asyncio.create_task(asyncio.sleep(60))
-    bot._solo_grace_tasks[sid] = grace_task
+    bot._rt.session(sid).solo_grace_task = grace_task
 
     _install_fake_client_user(bot, user_id=999)
 
@@ -374,7 +377,7 @@ async def test_different_user_rejoins_does_not_cancel_watchdog(
     await bot.on_voice_state_update(_make_member(222), before, after)
 
     # Watchdog still in place and not cancelled.
-    assert sid in bot._solo_grace_tasks
+    assert sess(bot, sid).solo_grace_task is not None
     assert not grace_task.cancelled()
 
     # Teardown.
@@ -394,7 +397,7 @@ async def test_facilitator_rejoins_different_channel_does_not_cancel_watchdog(
     sid = _seed_active_session(registry, voice_channel_id="444", facilitator_id="111")
 
     grace_task = asyncio.create_task(asyncio.sleep(60))
-    bot._solo_grace_tasks[sid] = grace_task
+    bot._rt.session(sid).solo_grace_task = grace_task
 
     _install_fake_client_user(bot, user_id=999)
 
@@ -406,7 +409,7 @@ async def test_facilitator_rejoins_different_channel_does_not_cancel_watchdog(
     await bot.on_voice_state_update(_make_member(111), before, after)
 
     # Watchdog for channel 444's session is untouched.
-    assert sid in bot._solo_grace_tasks
+    assert sess(bot, sid).solo_grace_task is not None
     assert not grace_task.cancelled()
 
     # Teardown.
@@ -438,12 +441,14 @@ async def test_solo_leave_with_only_bot_remaining_arms_watchdog(
     await bot.on_voice_state_update(facilitator, before, after)
 
     # Bot was correctly filtered out of remaining → watchdog armed.
-    assert sid in bot._solo_grace_tasks
+    assert sess(bot, sid).solo_grace_task is not None
 
     # Teardown.
-    bot._solo_grace_tasks[sid].cancel()
+    grace_task = must(sess(bot, sid).solo_grace_task)
+    assert grace_task is not None
+    grace_task.cancel()
     try:
-        await bot._solo_grace_tasks.pop(sid)
+        await grace_task
     except (asyncio.CancelledError, Exception):
         pass
 
@@ -458,7 +463,7 @@ async def test_double_arm_protection(
 
     # Pre-arm a watchdog.
     existing_task = asyncio.create_task(asyncio.sleep(60))
-    bot._solo_grace_tasks[sid] = existing_task
+    bot._rt.session(sid).solo_grace_task = existing_task
 
     facilitator = _make_member(111)
     bot_member = _make_member(999, is_bot=True)
@@ -473,7 +478,7 @@ async def test_double_arm_protection(
     await bot.on_voice_state_update(facilitator, before, after)
 
     # Existing task is still the one in the dict — not replaced.
-    assert bot._solo_grace_tasks[sid] is existing_task
+    assert sess(bot, sid).solo_grace_task is existing_task
 
     # Teardown.
     existing_task.cancel()
@@ -558,10 +563,10 @@ async def test_facilitator_rejoin_records_and_still_cancels_watchdog(
 ) -> None:
     sid = _seed_active_session(registry)
     grace_task = asyncio.create_task(asyncio.sleep(60))
-    bot._solo_grace_tasks[sid] = grace_task
+    bot._rt.session(sid).solo_grace_task = grace_task
     _install_fake_client_user(bot, user_id=999)
     await _join(bot, _make_member(111))
     await asyncio.sleep(0)
     assert grace_task.cancelled()
-    assert sid not in bot._solo_grace_tasks
+    assert sess(bot, sid).solo_grace_task is None
     assert _participants(conn, sid) == [("111", 1)]
