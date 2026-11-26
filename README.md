@@ -288,6 +288,7 @@ does not request Manage Channels to set a status while disconnected.
 | You invoke `/teamode` from a regular text channel | Refused: must be a voice channel's text chat |
 | You invoke `/teamode` but you're not in a voice channel | Refused: join voice first |
 | Another `/teamode` is already running in this channel | Refused (privately) — pick another channel |
+| Ocha is already in another voice channel of this server (a session or a break there) | The new `/teamode` fails at voice join after the intention modal: "Could not join voice — session cancelled." Discord allows one voice connection per bot per server; use `/groove`, or run a second Ocha bot |
 | You've hit the per-user rate limit (3 per 5 minutes) | Refused (privately) with seconds remaining |
 | The server has hit its daily cap (50/day) | Refused (privately) until local midnight |
 | You leave voice mid-session (others remain) | A random remaining voice member becomes facilitator |

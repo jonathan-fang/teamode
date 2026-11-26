@@ -87,6 +87,26 @@ voice channel, the bot joins that voice channel. If not, the bot can only post
 text/notification — the audio ring is skipped (graceful degradation) or
 refused (require voice — TBD in Round 2).
 
+**One voice connection per bot per server.** Discord lets a bot account be
+in only one voice channel per server (guild) at a time. Ocha stays connected
+from the moment the intention is submitted until the end-of-session reverie
+finishes, and for the whole of a break. While it is connected in one voice
+channel, a `/teamode` in a *different* voice channel of the same server still
+shows the welcome and the intention modal, but joining voice then fails
+(discord.py raises `ClientException: Already connected to a voice channel`)
+and the new session is cancelled with "Could not join voice — session
+cancelled." A break ending while another channel's session holds the
+connection skips its reverie and still posts "Break over". `/groove` never
+joins voice, so it is unaffected. Separate Ocha instances (each with its own
+bot token) don't collide: the limit is per bot account.
+
+**Voice channel status needs a connection.** With only "Set Voice Channel
+Status", a bot can set a channel's status only while connected to it.
+Setting it without being connected also needs **Manage Channels** (granted
+per channel via Edit Channel → Permissions, or on the bot's role). Ocha
+doesn't request it, so a status it can no longer reach (after a crash, for
+example) stays until someone clears it by hand.
+
 **Alternative for getting attention without voice**:
 - **`@mention`** the facilitator in a follow-up message → standard Discord
   notification (sound + badge).
