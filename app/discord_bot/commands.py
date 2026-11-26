@@ -298,8 +298,8 @@ class CommandsMixin:
             welcome_message_id=welcome_message.id,
         )
 
-        # Arm the pending-expiry watchdog — cancelled once a duration is
-        # picked (see ViewsMixin._handle_timer_pick).
+        # Arm the pending-expiry watchdog — cancelled once the intention is
+        # submitted (see IntentionModal.on_submit).
         self._arm_pending_expiry(session.session_id)
 
         # Post the participant prompt after the welcome embed.

@@ -467,8 +467,8 @@ class BreakMixin:
 
         # Join voice for the break and show a break status — Ocha stays
         # connected silently until the break ends. A connect failure is
-        # logged and the break continues without a status (the end still
-        # tries to connect, same as today).
+        # logged and the break continues without a status (the break end
+        # still tries to connect on its own).
         voice_client: discord.VoiceClient | None = None
         if mode == SessionMode.VOICE and isinstance(channel, discord.VoiceChannel):
             try:

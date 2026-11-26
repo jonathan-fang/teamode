@@ -82,7 +82,7 @@ class TeaModeBot(
         self._solo_grace_tasks: dict[int, asyncio.Task[None]] = {}
 
         # Per-session pending-expiry watchdog tasks; keyed by session_id.
-        # Armed at session start; cancelled once a duration is picked;
+        # Armed at session start; cancelled once the intention is submitted;
         # self-clearing (and cancelling the session) on timeout.
         self._pending_expiry_tasks: dict[int, asyncio.Task[None]] = {}
 
@@ -198,7 +198,7 @@ class TeaModeBot(
             return
         parts = raw_custom_id.split(":")
 
-        # Ignore non-teamode custom_ids (other bots, earlier code, etc.).
+        # Ignore custom_ids that don't belong to teamode (e.g. other bots).
         if len(parts) < 3 or parts[0] != "teamode":
             return
 

@@ -18,6 +18,19 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # Tunables
 # ---------------------------------------------------------------------------
+#
+# For manual smoke tests in Discord, temporarily lower these (and revert
+# before committing):
+#   PENDING_TIMEOUT_SECONDS 600 -> 30    pending-expiry without waiting 10 min
+#   WRAP_UP_MINUTES 3 -> 1, NUDGE_MIN_DURATION_MINUTES 10 -> 2
+#                                        wrap-up nudge on a 2-min Custom session
+#   BREAK_MINUTES 5 -> 1, LONG_BREAK_MINUTES 10 -> 2
+#   LONG_BREAK_MIN_SESSION_MINUTES 25 -> 1
+#                                        long break after 1-min chained sessions
+#   GO_AGAIN_TIMEOUT_SECONDS 180 -> 30   chain prompt expiry
+#   FOLLOWUP_TIMEOUT_SECONDS 180 -> 30   ✅/⛔ follow-up timeout
+#   SOLO_GRACE_SECONDS 300 -> 30         facilitator-left grace period
+# Short sessions need no edit: use the Custom button (1 minute minimum).
 
 DURATIONS_MINUTES: tuple[int, ...] = (5, 10, 25, 50)  # preset timer buttons
 # Bounds for the "Custom" timer button's minutes field (inclusive).
@@ -27,29 +40,27 @@ CUSTOM_MAX_MINUTES = 180
 RATE_LIMIT_WINDOW_SECONDS = 300
 RATE_LIMIT_ALLOWANCE = 3
 GUILD_DAILY_CAP = 50
-WRAP_UP_MINUTES = 3  # 3 # smoke
-NUDGE_MIN_DURATION_MINUTES = 10  # 10 # smoke
-PENDING_TIMEOUT_SECONDS = 600  # 600 # smoke
-BREAK_MINUTES = 5  # 5 # smoke
-LONG_BREAK_MINUTES = 10  # 10 # smoke
-LONG_BREAK_MIN_SESSION_MINUTES = (
-    25  # 25 sessions this long count toward the streak # smoke
-)
+WRAP_UP_MINUTES = 3
+NUDGE_MIN_DURATION_MINUTES = 10
+PENDING_TIMEOUT_SECONDS = 600
+BREAK_MINUTES = 5
+LONG_BREAK_MINUTES = 10
+LONG_BREAK_MIN_SESSION_MINUTES = 25  # sessions this long count toward the streak
 LONG_BREAK_STREAK = 2  # chained qualifying sessions before the long break
-GO_AGAIN_TIMEOUT_SECONDS = 180  # 180 # smoke
-CLEAR_SCAN_LIMIT = 800  # 800
-CLEAR_DELETE_INTERVAL_SECONDS = (
-    1.0  # pause between deletes (~5 per 5 s per channel) 1.0 is perfect
-)
+GO_AGAIN_TIMEOUT_SECONDS = 180
+CLEAR_SCAN_LIMIT = 800
+# Pause between /clear deletes — stays under Discord's ~5 deletes per 5 s
+# per channel.
+CLEAR_DELETE_INTERVAL_SECONDS = 1.0
 
-FOLLOWUP_TIMEOUT_SECONDS = 180  # moved from app/discord_bot/lifecycle.py
-SOLO_GRACE_SECONDS = 300  # 300 moved from app/discord_bot/lifecycle.py # smoke
-EDIT_INTERVAL_SECONDS = 10  # moved from app/discord_bot/timer.py
-BACKOFF_FLOOR_DEFAULT = 10.0  # moved from app/discord_bot/views.py
-BACKOFF_FLOOR_CAP = 60.0  # moved from app/discord_bot/timer.py
+FOLLOWUP_TIMEOUT_SECONDS = 180
+SOLO_GRACE_SECONDS = 300
+EDIT_INTERVAL_SECONDS = 10  # timer embed edit cadence
+BACKOFF_FLOOR_DEFAULT = 10.0  # timer-edit backoff floor (s); doubles per 429
+BACKOFF_FLOOR_CAP = 60.0  # upper bound for that doubling
 
-WELCOME_PROMPT_DELAY_SECONDS = 1.0  # moved from app/discord_bot/commands.py
-INTENTION_MAX_LENGTH = 4000  # moved from app/discord_bot/views.py
+WELCOME_PROMPT_DELAY_SECONDS = 1.0  # welcome -> Set Intention prompt gap
+INTENTION_MAX_LENGTH = 4000  # Discord modal text-input limit
 
 PROGRESS_BAR_WIDTH = 10
 TIMER_FIELD_VALUE_MAX_LENGTH = 1024  # Discord embed field.value hard limit

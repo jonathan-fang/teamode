@@ -227,7 +227,7 @@ class LifecycleMixin:
         """Cancel *session_id* if it is still PENDING after *sleep_seconds*.
 
         Cancelled (via ``_pending_expiry_tasks[session_id].cancel()``) once
-        a duration is picked — see ``ViewsMixin._handle_timer_pick``. This
+        the intention is submitted — see ``IntentionModal.on_submit``. This
         is the one terminal path that edits the welcome message rather than
         deleting it (deletion is for the messages of a session that
         actually ran).
