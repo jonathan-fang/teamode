@@ -38,7 +38,7 @@ def _fetch(conn: sqlite3.Connection, session_id: int) -> dict:
 def test_reconcile_marks_non_terminal_crashed(conn: sqlite3.Connection) -> None:
     """reconcile_crashed_sessions marks all non-terminal rows as 'crashed'."""
     ids = [_insert_with_status(conn, s) for s in _NON_TERMINAL]
-    count = reconcile_crashed_sessions(conn)
+    count = len(reconcile_crashed_sessions(conn))
 
     assert count == len(_NON_TERMINAL)
     for session_id in ids:
@@ -67,18 +67,18 @@ def test_reconcile_return_count_matches_rows_changed(conn: sqlite3.Connection) -
     _insert_with_status(conn, "completed")
     _insert_with_status(conn, "cancelled")
 
-    count = reconcile_crashed_sessions(conn)
+    count = len(reconcile_crashed_sessions(conn))
     assert count == 2
 
 
 def test_reconcile_no_rows(conn: sqlite3.Connection) -> None:
     """reconcile_crashed_sessions returns 0 when no non-terminal rows exist."""
-    count = reconcile_crashed_sessions(conn)
+    count = len(reconcile_crashed_sessions(conn))
     assert count == 0
 
 
 def test_reconcile_already_crashed_not_double_counted(conn: sqlite3.Connection) -> None:
     """A row already 'crashed' is not re-reconciled (it is terminal)."""
     _insert_with_status(conn, "crashed")
-    count = reconcile_crashed_sessions(conn)
+    count = len(reconcile_crashed_sessions(conn))
     assert count == 0

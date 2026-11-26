@@ -38,6 +38,7 @@ from app.constants import (
     PHASE_DEEP_FOCUS,
     SESSION_RECORD_INTENTION_SET,
     SESSION_RECORD_INTENTION_UNSET,
+    SESSION_RECORD_INTERRUPTED,
     SESSION_RECORD_META,
     TEACUP_BANNER,
     TIMER_BUTTON_LABEL,
@@ -175,6 +176,36 @@ def _build_session_record_content(
     block — intention, then duration + facilitator, then the time range —
     so the channel's long-term history isn't a lingering multi-field embed.
     """
+    range_line = TIMER_TIME_RANGE.format(
+        start=timer_format.format_hhmm(started_at, TEAMODE_TIMEZONE),
+        end=timer_format.format_hhmm(
+            started_at + timedelta(minutes=duration_minutes), TEAMODE_TIMEZONE
+        ),
+    )
+    return _record_head(intention, duration_minutes, facilitator_id) + range_line
+
+
+def _build_interrupted_record_content(
+    *,
+    intention: str | None,
+    duration_minutes: int,
+    facilitator_id: str,
+    interrupted_at: datetime,
+) -> str:
+    """Like :func:`_build_session_record_content`, for a timer frozen by a
+    bot restart: the range line becomes :data:`SESSION_RECORD_INTERRUPTED`."""
+    return _record_head(
+        intention, duration_minutes, facilitator_id
+    ) + SESSION_RECORD_INTERRUPTED.format(
+        hhmm=timer_format.format_hhmm(interrupted_at, TEAMODE_TIMEZONE)
+    )
+
+
+def _record_head(
+    intention: str | None, duration_minutes: int, facilitator_id: str
+) -> str:
+    """The intention and meta lines shared by both session records, each
+    followed by a newline."""
     intention_value = intention.strip() if intention and intention.strip() else None
     intention_line = (
         SESSION_RECORD_INTENTION_SET.format(
@@ -186,13 +217,7 @@ def _build_session_record_content(
     meta_line = SESSION_RECORD_META.format(
         duration=duration_minutes, facilitator_id=facilitator_id
     )
-    range_line = TIMER_TIME_RANGE.format(
-        start=timer_format.format_hhmm(started_at, TEAMODE_TIMEZONE),
-        end=timer_format.format_hhmm(
-            started_at + timedelta(minutes=duration_minutes), TEAMODE_TIMEZONE
-        ),
-    )
-    return f"{intention_line}\n{meta_line}\n{range_line}"
+    return f"{intention_line}\n{meta_line}\n"
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +551,16 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         timer_message = await self._channel.send(
             content=initial_content, embed=initial_embed
         )
+        # Persisted so a restart can finalize this timer instead of leaving
+        # it frozen (LifecycleMixin._cleanup_crashed_sessions).
+        try:
+            self._bot._registry.record_timer_message(
+                session_id=self._session_id, message_id=timer_message.id
+            )
+        except sqlite3.Error:
+            logger.exception(
+                "Failed to record timer message id for session %s", self._session_id
+            )
 
         # Stash edit state so the tick callback can reach it.
         self._bot._edit_states[self._session_id] = _EditState(

@@ -6,14 +6,18 @@ import asyncio
 import logging
 import random
 import sqlite3
+from collections.abc import Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import discord
 
 from app import local_audio, timer_format, voice
+from app.db import CrashedSession
 from app.config import TEAMODE_TIMEZONE
 from app.constants import (
     AUTO_HANDOFF_ANNOUNCE,
+    CRASH_CLEANUP_INTERVAL_SECONDS,
     END_EMBED_BODY,
     END_EMBED_TITLE,
     END_OF_SESSION_MENTION,
@@ -26,6 +30,7 @@ from app.constants import (
     PENDING_TIMEOUT_SECONDS,
     REFLECT_EMBED_DESCRIPTION,
     REFLECT_EMBED_TITLE,
+    SESSION_RECORD_INTERRUPTED,
     SOLO_GRACE_ENDED,
     SOLO_GRACE_SECONDS,
     VOICE_STATUS_CANCELLED,
@@ -35,6 +40,7 @@ from app.discord_bot.messages import best_effort
 from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.views import (
     COLORS,
+    _build_interrupted_record_content,
     _build_session_record_content,
     _build_timer_view,
     _build_welcome_embed,
@@ -205,6 +211,113 @@ class LifecycleMixin:
                 message_id,
                 session_id,
             )
+
+    # ------------------------------------------------------------------
+    # Startup crash cleanup
+    # ------------------------------------------------------------------
+
+    async def _cleanup_crashed_sessions(
+        self, sessions: Sequence[CrashedSession]
+    ) -> None:
+        """Tidy the Discord messages of sessions the last process left behind.
+
+        Called once after the first ``on_ready`` with the sessions
+        ``db.reconcile_crashed_sessions`` marked crashed at startup. Message
+        ids come from SQLite (sessions from before they were persisted have
+        none and are skipped). Per pre-crash status:
+
+        - ``pending`` / ``intention_set`` — the welcome gets
+          :data:`SESSION_RECORD_INTERRUPTED` as content and its duration
+          buttons disabled (same shape as pending expiry).
+        - ``active`` — the frozen timer becomes a plain-text record whose
+          range line reads :data:`SESSION_RECORD_INTERRUPTED`.
+        - ``followup`` — the timer had finished; it is (re)written to the
+          normal session record in case the crash hit before end-of-session
+          finalized it.
+
+        Voice status is left alone: Ocha isn't connected after a restart and
+        lacks Manage Channels, so Discord would refuse it. Every edit is
+        best-effort and edits are paced by
+        :data:`CRASH_CLEANUP_INTERVAL_SECONDS`.
+        """
+        edits_done = 0
+        for crashed in sessions:
+            try:
+                channel_id = int(crashed.text_channel_id)
+            except ValueError:
+                logger.warning(
+                    "Crashed session %s has a non-numeric channel id %r — skipping",
+                    crashed.session_id,
+                    crashed.text_channel_id,
+                )
+                continue
+            channel = self.client.get_channel(channel_id)
+            if not isinstance(channel, (discord.VoiceChannel, discord.TextChannel)):
+                logger.warning(
+                    "Channel %s for crashed session %s is not a voice or text"
+                    " channel — skipping cleanup",
+                    crashed.text_channel_id,
+                    crashed.session_id,
+                )
+                continue
+
+            interrupted_at = datetime.fromisoformat(crashed.ended_at)
+            status = crashed.previous_status
+            if status in ("pending", "intention_set"):
+                if crashed.welcome_message_id is None:
+                    continue
+                message_id = crashed.welcome_message_id
+                call = channel.get_partial_message(message_id).edit(
+                    content=SESSION_RECORD_INTERRUPTED.format(
+                        hhmm=timer_format.format_hhmm(interrupted_at, TEAMODE_TIMEZONE)
+                    ),
+                    embed=_build_welcome_embed(),
+                    view=_build_timer_view(crashed.session_id, disabled=True),
+                )
+            elif (
+                status in ("active", "followup")
+                and crashed.timer_message_id is not None
+                and crashed.duration_minutes is not None
+                and crashed.started_at is not None
+            ):
+                message_id = crashed.timer_message_id
+                if status == "active":
+                    content = _build_interrupted_record_content(
+                        intention=crashed.intention,
+                        duration_minutes=crashed.duration_minutes,
+                        facilitator_id=crashed.facilitator_id,
+                        interrupted_at=interrupted_at,
+                    )
+                else:
+                    content = _build_session_record_content(
+                        intention=crashed.intention,
+                        duration_minutes=crashed.duration_minutes,
+                        facilitator_id=crashed.facilitator_id,
+                        started_at=datetime.fromisoformat(crashed.started_at),
+                    )
+                call = channel.get_partial_message(message_id).edit(
+                    content=content,
+                    embed=None,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            else:
+                continue
+
+            if edits_done:
+                await asyncio.sleep(CRASH_CLEANUP_INTERVAL_SECONDS)
+            edits_done += 1
+            if await best_effort(
+                call,
+                logger,
+                "Failed to clean up message %s for crashed session %s",
+                message_id,
+                crashed.session_id,
+            ):
+                logger.info(
+                    "Cleaned up %s message for crashed session %s",
+                    status,
+                    crashed.session_id,
+                )
 
     # ------------------------------------------------------------------
     # Pending-session expiry

@@ -28,7 +28,9 @@ CREATE TABLE sessions (
     followup_note        TEXT,
     status               TEXT    NOT NULL,
     handoff_facilitator_id TEXT,
-    mode                 TEXT    NOT NULL DEFAULT 'voice'
+    mode                 TEXT    NOT NULL DEFAULT 'voice',
+    welcome_message_id   TEXT,
+    timer_message_id     TEXT
 );
 
 CREATE INDEX idx_sessions_facilitator ON sessions(facilitator_id);
@@ -183,6 +185,21 @@ channel id in `voice_channel_id`, since that column is NOT NULL.
   databases created before it; existing rows read as `voice`.
 - **Reason to store**: `/stats` shows a separate Groove line and leaves
   Groove sessions out of "This server", which counts co-working there.
+
+### `welcome_message_id` / `timer_message_id`
+Discord message ids of the session's welcome message (duration buttons)
+and its timer message, written as each is posted.
+
+- **Type**: snowflake string, nullable.
+- **Migration**: added by `init_db` via `ALTER TABLE ... ADD COLUMN`;
+  older rows are NULL.
+- **Reason to store**: after a crash or kill, startup reconciliation marks
+  unfinished sessions `crashed`, and once connected the bot uses these ids
+  to tidy Discord: a frozen timer is rewritten to a plain-text record ending
+  "⚠️ Interrupted · Ocha restarted at HH:MM", a timer in follow-up gets its
+  normal record, and a still-pending welcome gets that line and disabled
+  buttons. Rows with NULL ids are skipped. The voice channel status is not
+  reset — Ocha isn't connected after a restart and lacks Manage Channels.
 
 ---
 

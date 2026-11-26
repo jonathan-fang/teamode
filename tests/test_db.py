@@ -36,6 +36,8 @@ EXPECTED_COLUMNS = {
     "status",
     "handoff_facilitator_id",
     "mode",
+    "welcome_message_id",
+    "timer_message_id",
 }
 
 

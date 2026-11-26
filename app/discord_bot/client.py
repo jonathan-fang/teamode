@@ -5,16 +5,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from collections.abc import Sequence
 
 import discord
 from discord import app_commands
 
 from app.config import TEAMODE_DEV_GUILD_IDS, TEAMODE_TIMEZONE
+from app.db import CrashedSession
 from app.discord_bot.breaks import BreakMixin, _BreakState, _ChainState
 from app.discord_bot.clear import ClearMixin
 from app.discord_bot.commands import CommandsMixin
 from app.discord_bot.lifecycle import LifecycleMixin
 from app.discord_bot.stats import StatsMixin
+from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.timer import TimerMixin
 from app.discord_bot.views import (
     ViewsMixin,
@@ -47,9 +50,16 @@ class TeaModeBot(
         self,
         conn: sqlite3.Connection,
         registry: SessionRegistry,
+        crashed_sessions: Sequence[CrashedSession] = (),
     ) -> None:
         self._conn = conn
         self._registry = registry
+
+        # Sessions marked crashed at startup, whose Discord messages are
+        # tidied once after the first on_ready (see
+        # LifecycleMixin._cleanup_crashed_sessions). Emptied when handed off,
+        # so gateway reconnects (which re-fire on_ready) don't repeat it.
+        self._crashed_sessions: list[CrashedSession] = list(crashed_sessions)
 
         # Per-user sliding-window and per-guild daily-cap rate limiting for
         # /teamode invocations. In-memory only — resets on restart.
@@ -174,6 +184,10 @@ class TeaModeBot(
                 "Set TEAMODE_DEV_GUILD_ID to your dev guild id for instant "
                 "command propagation."
             )
+
+        if self._crashed_sessions:
+            crashed, self._crashed_sessions = self._crashed_sessions, []
+            spawn_logged(self._cleanup_crashed_sessions(crashed), name="crash-cleanup")
 
     async def on_interaction(self, interaction: discord.Interaction) -> None:
         """Route component interactions (button clicks, select menus, etc.).

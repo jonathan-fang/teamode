@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     followup_note        TEXT,
     status               TEXT    NOT NULL,
     handoff_facilitator_id TEXT,
-    mode                 TEXT    NOT NULL DEFAULT 'voice'
+    mode                 TEXT    NOT NULL DEFAULT 'voice',
+    welcome_message_id   TEXT,
+    timer_message_id     TEXT
 )
 """
 
@@ -71,6 +73,18 @@ def _migrate_add_mode(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_add_message_ids(conn: sqlite3.Connection) -> None:
+    """Add ``welcome_message_id`` / ``timer_message_id`` to an older table.
+
+    Idempotent. Existing rows get NULL — their Discord messages were never
+    recorded, so startup crash cleanup skips them.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+    for column in ("welcome_message_id", "timer_message_id"):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} TEXT")
+
+
 def init_db(path: str | Path) -> sqlite3.Connection:
     """Open (or create) the database at *path* and apply the schema.
 
@@ -81,6 +95,7 @@ def init_db(path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.execute(_CREATE_SESSIONS)
     _migrate_add_mode(conn)
+    _migrate_add_message_ids(conn)
     conn.execute(_CREATE_IDX_FACILITATOR)
     conn.execute(_CREATE_IDX_STARTED_AT)
     conn.execute(_CREATE_SESSION_PARTICIPANTS)
@@ -142,6 +157,28 @@ def update_duration(
     conn.execute(
         "UPDATE sessions SET duration_minutes = ? WHERE id = ?",
         (duration_minutes, session_id),
+    )
+    conn.commit()
+
+
+def update_welcome_message_id(
+    conn: sqlite3.Connection, *, session_id: int, message_id: int
+) -> None:
+    """Record the welcome message id so a restart can disable its buttons."""
+    conn.execute(
+        "UPDATE sessions SET welcome_message_id = ? WHERE id = ?",
+        (str(message_id), session_id),
+    )
+    conn.commit()
+
+
+def update_timer_message_id(
+    conn: sqlite3.Connection, *, session_id: int, message_id: int
+) -> None:
+    """Record the timer message id so a restart can finalize a frozen timer."""
+    conn.execute(
+        "UPDATE sessions SET timer_message_id = ? WHERE id = ?",
+        (str(message_id), session_id),
     )
     conn.commit()
 
@@ -389,19 +426,63 @@ def fetch_guild_stats_rows(
     return [_row_to_stats_row(row) for row in cur.fetchall()]
 
 
-def reconcile_crashed_sessions(conn: sqlite3.Connection) -> int:
+@dataclass(frozen=True)
+class CrashedSession:
+    """A session :func:`reconcile_crashed_sessions` marked ``'crashed'``,
+    with what startup cleanup needs to tidy its Discord messages."""
+
+    session_id: int
+    previous_status: str
+    mode: str
+    text_channel_id: str
+    facilitator_id: str
+    intention: str | None
+    duration_minutes: int | None
+    started_at: str | None
+    ended_at: str
+    welcome_message_id: int | None
+    timer_message_id: int | None
+
+
+def reconcile_crashed_sessions(conn: sqlite3.Connection) -> list[CrashedSession]:
     """On startup, mark any non-terminal sessions as 'crashed'.
 
     Sets status='crashed' and ended_at=now() for any row whose status is in
     ('pending', 'intention_set', 'active', 'followup').
 
-    Returns the number of rows reconciled.
+    Returns the reconciled sessions (with their pre-crash status) so the
+    bot can clean up their Discord messages once connected.
     """
     ts = _now_utc()
     placeholders = ",".join("?" * len(_NON_TERMINAL_STATUSES))
-    cur = conn.execute(
+    rows = conn.execute(
+        f"""
+        SELECT id, status, mode, text_channel_id,
+               COALESCE(handoff_facilitator_id, facilitator_id),
+               intention, duration_minutes, started_at,
+               welcome_message_id, timer_message_id
+        FROM sessions WHERE status IN ({placeholders}) ORDER BY id
+        """,  # noqa: S608
+        _NON_TERMINAL_STATUSES,
+    ).fetchall()
+    conn.execute(
         f"UPDATE sessions SET status = 'crashed', ended_at = ? WHERE status IN ({placeholders})",  # noqa: S608
         (ts, *_NON_TERMINAL_STATUSES),
     )
     conn.commit()
-    return cur.rowcount
+    return [
+        CrashedSession(
+            session_id=row[0],
+            previous_status=row[1],
+            mode=row[2],
+            text_channel_id=row[3],
+            facilitator_id=row[4],
+            intention=row[5],
+            duration_minutes=row[6],
+            started_at=row[7],
+            ended_at=ts,
+            welcome_message_id=int(row[8]) if row[8] is not None else None,
+            timer_message_id=int(row[9]) if row[9] is not None else None,
+        )
+        for row in rows
+    ]

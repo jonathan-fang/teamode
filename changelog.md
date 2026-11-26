@@ -21,6 +21,16 @@
   `TEAMODE_TIMEZONE` at submit time, rounded to the nearest minute. A time
   already past today means tomorrow; the result must be 1–180 minutes.
 
+### Fixed
+
+- **Frozen timers after a restart.** Killing or crashing Ocha mid-session
+  used to leave the timer embed frozen forever. Sessions now store their
+  welcome and timer message ids, and on the next startup Ocha rewrites a
+  frozen timer to a record ending "⚠️ Interrupted · Ocha restarted at
+  HH:MM" and disables a still-pending welcome's buttons. Sessions from
+  before this change can't be tidied (no stored ids); a stuck voice
+  channel status after a `/teamode` crash still needs clearing by hand.
+
 ### Changed
 
 - **Timer presets trimmed** back to 5 / 10 / 25 / 50 min; other lengths
