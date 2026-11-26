@@ -66,6 +66,7 @@ from app.constants import (
     VOICE_STATUS_BREAK,
     VOICE_STATUS_BREAK_OVER,
 )
+from app.discord_bot.messages import best_effort
 from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.views import SessionChannel, _now, _send_refusal
 from app.session import SessionMode, SessionRegistry
@@ -353,14 +354,13 @@ class BreakMixin:
             view = _build_streak_chain_view(chain.session_id, disabled=True)
         else:
             view = _build_post_break_view(chain.session_id, disabled=True)
-        try:
-            await channel.get_partial_message(chain.message_id).edit(view=view)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            logger.warning(
-                "Failed to disable chain prompt buttons for session %s in channel %s",
-                chain.session_id,
-                chain.channel_id,
-            )
+        await best_effort(
+            channel.get_partial_message(chain.message_id).edit(view=view),
+            logger,
+            "Failed to disable chain prompt buttons for session %s in channel %s",
+            chain.session_id,
+            chain.channel_id,
+        )
 
     async def _clear_chain_state(self, channel_id: int) -> None:
         """Pop and disable the standing chain prompt in *channel_id*, if any.
@@ -473,7 +473,7 @@ class BreakMixin:
         if mode == SessionMode.VOICE and isinstance(channel, discord.VoiceChannel):
             try:
                 voice_client = await voice.connect(channel)
-            except Exception:
+            except voice.VOICE_ERRORS:
                 logger.warning(
                     "Voice connect failed for break start in channel %s", channel_id
                 )
@@ -554,7 +554,7 @@ class BreakMixin:
             if isinstance(voice_channel, discord.VoiceChannel):
                 try:
                     voice_client = await voice.connect(voice_channel)
-                except Exception:
+                except voice.VOICE_ERRORS:
                     logger.warning(
                         "Voice connect failed for break end in channel %s", channel_id
                     )
@@ -640,7 +640,7 @@ class BreakMixin:
         if break_state.voice_client is not None:
             try:
                 await voice.disconnect(break_state.voice_client)
-            except Exception:
+            except voice.VOICE_ERRORS:
                 logger.warning(
                     "Failed to disconnect break voice client in channel %s",
                     channel_id,
@@ -654,12 +654,12 @@ class BreakMixin:
                 channel_id,
             )
             return
-        try:
-            await channel.get_partial_message(break_state.message_id).edit(
+        await best_effort(
+            channel.get_partial_message(break_state.message_id).edit(
                 content=BREAK_CANCELLED
-            )
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            logger.warning(
-                "Failed to edit break message to cancelled in channel %s", channel_id
-            )
+            ),
+            logger,
+            "Failed to edit break message to cancelled in channel %s",
+            channel_id,
+        )
         logger.info("Break cancelled by new session in channel %s", channel_id)

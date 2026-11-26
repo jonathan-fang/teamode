@@ -30,6 +30,7 @@ from app.constants import (
     TEAMODE_COMMAND_DESCRIPTION,
     WELCOME_PROMPT_DELAY_SECONDS,
 )
+from app.discord_bot.messages import best_effort
 from app.discord_bot.views import (
     COLORS,
     _build_timer_view,
@@ -230,49 +231,31 @@ class CommandsMixin:
         # failure is logged and does not block the others or the new session.
         previous_cleanup = self._channel_cleanup.pop(channel.id, None)
         if previous_cleanup is not None:
-            if previous_cleanup.times_up_id is not None:
-                try:
-                    await channel.get_partial_message(
-                        previous_cleanup.times_up_id
-                    ).delete()
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    logger.warning(
-                        "Failed to delete previous Time's up message %s in channel %s",
-                        previous_cleanup.times_up_id,
-                        channel.id,
-                    )
-            if previous_cleanup.why_id is not None:
-                try:
-                    await channel.get_partial_message(previous_cleanup.why_id).delete()
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    logger.warning(
-                        "Failed to delete previous follow-up why message %s"
-                        " in channel %s",
-                        previous_cleanup.why_id,
-                        channel.id,
-                    )
-            if previous_cleanup.ping_id is not None:
-                try:
-                    await channel.get_partial_message(previous_cleanup.ping_id).delete()
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    logger.warning(
-                        "Failed to delete previous Groove ping message %s"
-                        " in channel %s",
-                        previous_cleanup.ping_id,
+            for message_id, what in (
+                (previous_cleanup.times_up_id, "Time's up message"),
+                (previous_cleanup.why_id, "follow-up why message"),
+                (previous_cleanup.ping_id, "Groove ping message"),
+            ):
+                if message_id is not None:
+                    await best_effort(
+                        channel.get_partial_message(message_id).delete(),
+                        logger,
+                        "Failed to delete previous %s %s in channel %s",
+                        what,
+                        message_id,
                         channel.id,
                     )
             if previous_cleanup.reflect_id is not None:
-                try:
-                    await channel.get_partial_message(previous_cleanup.reflect_id).edit(
+                await best_effort(
+                    channel.get_partial_message(previous_cleanup.reflect_id).edit(
                         embed=None
-                    )
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    logger.warning(
-                        "Failed to strip embed from previous Reflect message %s"
-                        " in channel %s",
-                        previous_cleanup.reflect_id,
-                        channel.id,
-                    )
+                    ),
+                    logger,
+                    "Failed to strip embed from previous Reflect message %s"
+                    " in channel %s",
+                    previous_cleanup.reflect_id,
+                    channel.id,
+                )
 
         # Clear any standing chain prompt (Go again / break offer) and
         # cancel any in-progress break in this channel — a new session
@@ -281,13 +264,9 @@ class CommandsMixin:
         await self._clear_chain_state(channel.id)
         await self._cancel_break(channel.id)
 
-        # Build the welcome embed.
-        embed = _build_welcome_embed()
-
-        # Build the timer-pick button row.
-        view = _build_timer_view(session.session_id)
-
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(
+            embed=_build_welcome_embed(), view=_build_timer_view(session.session_id)
+        )
 
         # Capture the welcome message id — all later edits/deletes go
         # through the channel, never through the interaction webhook, since

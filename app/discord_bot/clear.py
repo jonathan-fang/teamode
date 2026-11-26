@@ -19,6 +19,7 @@ from app.constants import (
     MSG_WRONG_CHANNEL,
 )
 from app.discord_bot.breaks import _BreakState, _ChainState
+from app.discord_bot.messages import best_effort
 from app.discord_bot.views import _ChannelCleanup, _EditState, _SetupMessages
 from app.session import SessionRegistry
 
@@ -155,14 +156,13 @@ class ClearMixin:
             if attempted_delete:
                 await asyncio.sleep(CLEAR_DELETE_INTERVAL_SECONDS)
             attempted_delete = True
-            try:
-                await message.delete()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                logger.warning(
-                    "Failed to delete message %s in channel %s via /clear",
-                    message.id,
-                    channel_id,
-                )
+            if not await best_effort(
+                message.delete(),
+                logger,
+                "Failed to delete message %s in channel %s via /clear",
+                message.id,
+                channel_id,
+            ):
                 continue
 
             deleted_count += 1

@@ -31,6 +31,7 @@ from app.constants import (
     VOICE_STATUS_CANCELLED,
     VOICE_STATUS_FINISHED,
 )
+from app.discord_bot.messages import best_effort
 from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.views import (
     COLORS,
@@ -197,14 +198,13 @@ class LifecycleMixin:
         ):
             if message_id is None:
                 continue
-            try:
-                await channel.get_partial_message(message_id).delete()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                logger.warning(
-                    "Failed to delete setup message %s for session %s",
-                    message_id,
-                    session_id,
-                )
+            await best_effort(
+                channel.get_partial_message(message_id).delete(),
+                logger,
+                "Failed to delete setup message %s for session %s",
+                message_id,
+                session_id,
+            )
 
     # ------------------------------------------------------------------
     # Pending-session expiry
@@ -250,19 +250,16 @@ class LifecycleMixin:
         if setup is not None:
             channel = self.client.get_channel(setup.channel_id)
             if isinstance(channel, (discord.VoiceChannel, discord.TextChannel)):
-                try:
-                    partial = channel.get_partial_message(setup.welcome_message_id)
-                    await partial.edit(
+                await best_effort(
+                    channel.get_partial_message(setup.welcome_message_id).edit(
                         content=MSG_PENDING_EXPIRED,
                         embed=_build_welcome_embed(),
                         view=_build_timer_view(session_id, disabled=True),
-                    )
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    logger.warning(
-                        "Failed to edit welcome message on pending expiry"
-                        " for session %s",
-                        session_id,
-                    )
+                    ),
+                    logger,
+                    "Failed to edit welcome message on pending expiry for session %s",
+                    session_id,
+                )
             else:
                 logger.warning(
                     "Channel %s for session %s is not a voice or text channel —"
@@ -442,7 +439,7 @@ class LifecycleMixin:
             timed_out_session = self._registry.get(session_id)
             try:
                 self._registry.mark_followup_timeout(session_id=session_id)
-            except Exception:
+            except Exception:  # broad on purpose: the cleanup below must still run
                 logger.exception(
                     "mark_followup_timeout failed for session %s", session_id
                 )
@@ -738,7 +735,7 @@ class LifecycleMixin:
         if voice_client is not None:
             try:
                 await voice.disconnect(voice_client)
-            except Exception:
+            except Exception:  # broad on purpose: steps 5-6 must still run
                 logger.exception(
                     "Failed to disconnect voice on solo-grace timeout for session %s",
                     session_id,
@@ -747,7 +744,7 @@ class LifecycleMixin:
         # 5) Write status='cancelled' to SQLite.
         try:
             self._registry.mark_cancelled(session_id=session_id)
-        except Exception:
+        except Exception:  # broad on purpose: step 6 and terminal cleanup must run
             logger.exception(
                 "Failed to mark session %s cancelled on solo-grace timeout",
                 session_id,

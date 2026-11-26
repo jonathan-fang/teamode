@@ -11,9 +11,29 @@ import asyncio
 import logging
 from pathlib import Path
 
+import aiohttp
 import discord
 
 logger = logging.getLogger(__name__)
+
+# Everything a discord.py voice call (connect / play / disconnect) can raise
+# for a genuine voice failure, as opposed to a bug in our own code:
+#   DiscordException   ClientException (already connected, ffmpeg missing,
+#                      not connected), OpusNotLoaded, ConnectionClosed
+#   TimeoutError       connect() timing out (asyncio.TimeoutError)
+#   RuntimeError       PyNaCl / davey missing
+#   TypeError          the unexpected-client-type guard in connect() below
+#   OSError, aiohttp.ClientError   network / subprocess failures
+# Callers that degrade gracefully (continue without voice) catch this tuple
+# so unrelated exceptions still surface.
+VOICE_ERRORS: tuple[type[BaseException], ...] = (
+    discord.DiscordException,
+    TimeoutError,
+    RuntimeError,
+    TypeError,
+    OSError,
+    aiohttp.ClientError,
+)
 
 # Resolved once at import so the same Path object is reused per playback call.
 REVERIE_PATH: Path = (Path(__file__).parent / ".." / "assets" / "reverie.wav").resolve()
@@ -71,7 +91,7 @@ def play_wind_chime(voice_client: discord.VoiceClient) -> bool:
         return False
     try:
         voice_client.play(discord.FFmpegPCMAudio(str(WIND_CHIME_PATH)))
-    except (discord.ClientException, OSError) as exc:
+    except VOICE_ERRORS as exc:
         logger.warning("Failed to play wind chime: %s", exc)
         return False
     return True
@@ -109,7 +129,7 @@ async def play_reverie_then_disconnect(voice_client: discord.VoiceClient) -> boo
     play_ok = True
     try:
         voice_client.play(discord.FFmpegPCMAudio(str(REVERIE_PATH)), after=after)
-    except Exception:
+    except VOICE_ERRORS:
         # Synchronous failure (e.g. ffmpeg not on PATH). Skip waiting on the
         # event — the after callback will never fire.
         play_ok = False
@@ -120,7 +140,7 @@ async def play_reverie_then_disconnect(voice_client: discord.VoiceClient) -> boo
 
     try:
         await voice_client.disconnect()
-    except Exception as exc:
+    except VOICE_ERRORS as exc:
         logger.warning("voice disconnect error after reverie playback: %s", exc)
 
     return success[0]
