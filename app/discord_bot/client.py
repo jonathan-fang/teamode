@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import sqlite3
 from collections.abc import Sequence
@@ -12,19 +11,15 @@ from discord import app_commands
 
 from app.config import TEAMODE_DEV_GUILD_IDS, TEAMODE_TIMEZONE
 from app.db import CrashedSession
-from app.discord_bot.breaks import BreakMixin, _BreakState, _ChainState
+from app.discord_bot.breaks import BreakMixin
 from app.discord_bot.clear import ClearMixin
 from app.discord_bot.commands import CommandsMixin
 from app.discord_bot.lifecycle import LifecycleMixin
+from app.discord_bot.runtime import RuntimeStore
 from app.discord_bot.stats import StatsMixin
 from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.timer import TimerMixin
-from app.discord_bot.views import (
-    ViewsMixin,
-    _ChannelCleanup,
-    _EditState,
-    _SetupMessages,
-)
+from app.discord_bot.views import ViewsMixin
 from app.rate_limit import RateLimiter
 from app.session import SessionRegistry
 
@@ -65,73 +60,10 @@ class TeaModeBot(
         # /teamode invocations. In-memory only — resets on restart.
         self._rate_limiter = RateLimiter(tz=TEAMODE_TIMEZONE)
 
-        # Per-session edit state, keyed by session_id.
-        # Populated when an active timer message is posted; removed on followup.
-        self._edit_states: dict[int, _EditState] = {}
-
-        # Per-session watchdog tasks for the 3-minute follow-up timeout.
-        # Keyed by session_id; cancelled on facilitator reaction.
-        self._watchdog_tasks: dict[int, asyncio.Task[None]] = {}
-
-        # Per-session Reflect message ids; maps session_id → message.id.
-        # Used by on_raw_reaction_add to identify which session a reaction belongs to.
-        self._reflect_message_ids: dict[int, int] = {}
-
-        # Per-session voice client; populated after voice.connect succeeds.
-        # Cleared at normal end-of-session and by the solo-grace timeout flow.
-        self._voice_clients: dict[int, discord.VoiceClient] = {}
-
-        # Per-session countdown asyncio.Task; populated when _run_and_followup is
-        # scheduled. Cancelled by the solo-grace timeout to prevent the normal
-        # end-of-session sequence from racing in.
-        self._countdown_tasks: dict[int, asyncio.Task[None]] = {}
-
-        # Per-session solo-grace watchdog tasks; keyed by session_id.
-        # Armed when the facilitator leaves and no other humans remain.
-        # Cancelled on facilitator rejoin; self-clearing on timeout.
-        self._solo_grace_tasks: dict[int, asyncio.Task[None]] = {}
-
-        # Per-session pending-expiry watchdog tasks; keyed by session_id.
-        # Armed at session start; cancelled once the intention is submitted;
-        # self-clearing (and cancelling the session) on timeout.
-        self._pending_expiry_tasks: dict[int, asyncio.Task[None]] = {}
-
-        # Per-session welcome / Set-Intention message ids, keyed by
-        # session_id — captured at session start for later edit/delete via
-        # the channel (never the interaction webhook).
-        self._setup_messages: dict[int, _SetupMessages] = {}
-
-        # The most recently finished session's cleanup-relevant message ids
-        # per text-channel id (Time's up, Reflect, and the ⛔ "why" line).
-        # In-memory only — lost on restart (accepted). Cleaned up when the
-        # next session starts in that channel.
-        self._channel_cleanup: dict[int, _ChannelCleanup] = {}
-
-        # The standing "Go again / break offer" chaining prompt per text
-        # channel — posted after a facilitator ✅/⛔, and again (Go-again
-        # only) after a break ends. In-memory only — lost on restart.
-        # Cleared when a break starts or a new session starts in the
-        # channel (see BreakMixin._clear_chain_state).
-        self._chain_states: dict[int, _ChainState] = {}
-
-        # The in-progress break (five- or ten-minute) per text channel, if
-        # any. In-memory only — lost on restart. Cancelled when a new
-        # session starts in the channel (see BreakMixin._cancel_break).
-        self._break_states: dict[int, _BreakState] = {}
-
-        # Per-channel streak of chained, qualifying session durations (each
-        # >= LONG_BREAK_MIN_SESSION_MINUTES, ending in a facilitator ✅/⛔,
-        # and — after the first — started via Go again). In-memory only —
-        # reset whenever a break starts, a session starts via /teamode, a
-        # session is too short, a follow-up times out, or a session is
-        # cancelled (see BreakMixin._reset_streak and its callers).
-        self._streaks: dict[int, list[int]] = {}
-
-        # Whether each session was started via Go again (True) or
-        # /teamode (False) — recorded at session creation, read once (and
-        # popped) by BreakMixin._post_chain_prompt via _pop_chained_flag to
-        # decide whether to extend or restart the channel's streak.
-        self._chained_via_go_again: dict[int, bool] = {}
+        # Everything kept in memory about live sessions and text channels
+        # (messages to edit or delete later, background tasks, the chain
+        # prompt, breaks, streaks). In-memory only — lost on restart.
+        self._rt = RuntimeStore()
 
         intents = discord.Intents.default()
         intents.guilds = True

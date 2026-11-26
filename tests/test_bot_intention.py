@@ -34,6 +34,7 @@ from app.discord_bot.views import (
 )
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
+from tests.runtime_helpers import must, sess
 
 
 # ---------------------------------------------------------------------------
@@ -339,8 +340,8 @@ async def test_modal_submit_records_intention_and_posts_timer(
     mock_create_task.assert_called_once()
 
     # Edit state stashed.
-    assert session_id in bot._edit_states
-    assert bot._edit_states[session_id].message is fake_timer_msg
+    assert sess(bot, session_id).edit_state is not None
+    assert must(sess(bot, session_id).edit_state).message is fake_timer_msg
 
 
 @pytest.mark.asyncio
@@ -354,7 +355,7 @@ async def test_modal_submit_cancels_pending_expiry(
         registry, facilitator_id=111, duration_minutes=25
     )
     expiry_task = asyncio.create_task(asyncio.sleep(60))
-    bot._pending_expiry_tasks[session_id] = expiry_task
+    bot._rt.session(session_id).pending_expiry_task = expiry_task
 
     fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
     fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
@@ -374,7 +375,7 @@ async def test_modal_submit_cancels_pending_expiry(
         ):
             await modal.on_submit(inter)
 
-        assert session_id not in bot._pending_expiry_tasks
+        assert sess(bot, session_id).pending_expiry_task is None
         assert expiry_task.cancelling() > 0 or expiry_task.cancelled()
     finally:
         expiry_task.cancel()
@@ -439,7 +440,7 @@ async def test_modal_submit_disables_welcome_buttons(
     session_id = _seed_session_with_duration(
         registry, facilitator_id=111, duration_minutes=25
     )
-    bot._setup_messages[session_id] = _SetupMessages(
+    bot._rt.session(session_id).setup = _SetupMessages(
         channel_id=444, welcome_message_id=100
     )
 
@@ -492,7 +493,7 @@ async def test_modal_submit_welcome_edit_failure_logged_session_still_active(
     session_id = _seed_session_with_duration(
         registry, facilitator_id=111, duration_minutes=25
     )
-    bot._setup_messages[session_id] = _SetupMessages(
+    bot._rt.session(session_id).setup = _SetupMessages(
         channel_id=444, welcome_message_id=100
     )
 

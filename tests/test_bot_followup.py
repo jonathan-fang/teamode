@@ -26,6 +26,7 @@ from app.discord_bot import TeaModeBot
 from app.discord_bot.views import COLORS
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
+from tests.runtime_helpers import sess
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +222,7 @@ async def test_end_of_session_sequence_happy_path(
     assert add_calls[1].args[0] == "⛔"
 
     # Reflect message id stored.
-    assert bot._reflect_message_ids[sid] == 22222
+    assert sess(bot, sid).reflect_message_id == 22222
 
     # Watchdog created.
     mock_create_task.assert_called_once()
@@ -340,10 +341,11 @@ async def test_facilitator_checkmark_marks_completed_1(
     sid = _seed_followup_session(registry, facilitator_id=111)
 
     # Set up state as if post-zero sequence ran.
-    bot._reflect_message_ids[sid] = 55555
+    bot._rt.session(sid).reflect_message_id = 55555
     watchdog = MagicMock()
     watchdog.cancel = MagicMock()
-    bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
+    watchdog.done = MagicMock(return_value=False)
+    bot._rt.session(sid).watchdog_task = watchdog  # type: ignore[assignment]
 
     _install_fake_client_user(bot, user_id=9)
 
@@ -369,7 +371,7 @@ async def test_facilitator_checkmark_marks_completed_1(
     watchdog.cancel.assert_called_once()
 
     # Reflect-message id popped.
-    assert sid not in bot._reflect_message_ids
+    assert sess(bot, sid).reflect_message_id is None
 
 
 # ---------------------------------------------------------------------------
@@ -385,10 +387,11 @@ async def test_facilitator_no_entry_marks_completed_0_and_posts_why(
     """Facilitator ⛔: mark_completed(0), watchdog cancelled, 'why' prompt sent."""
     sid = _seed_followup_session(registry, facilitator_id=111)
 
-    bot._reflect_message_ids[sid] = 66666
+    bot._rt.session(sid).reflect_message_id = 66666
     watchdog = MagicMock()
     watchdog.cancel = MagicMock()
-    bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
+    watchdog.done = MagicMock(return_value=False)
+    bot._rt.session(sid).watchdog_task = watchdog  # type: ignore[assignment]
 
     fake_client = _install_fake_client_user(bot, user_id=9)
 
@@ -414,7 +417,7 @@ async def test_facilitator_no_entry_marks_completed_0_and_posts_why(
     assert row[1] is None
 
     watchdog.cancel.assert_called_once()
-    assert sid not in bot._reflect_message_ids
+    assert sess(bot, sid).reflect_message_id is None
 
     # "Why" prompt sent first, chain prompt (Go again / break) sent after it.
     assert fake_channel.send.await_count == 2
@@ -439,10 +442,11 @@ async def test_non_facilitator_reaction_logged_only(
     """Non-facilitator ✅: no mark_completed, watchdog untouched, id still present."""
     sid = _seed_followup_session(registry, facilitator_id=111)
 
-    bot._reflect_message_ids[sid] = 77777
+    bot._rt.session(sid).reflect_message_id = 77777
     watchdog = MagicMock()
     watchdog.cancel = MagicMock()
-    bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
+    watchdog.done = MagicMock(return_value=False)
+    bot._rt.session(sid).watchdog_task = watchdog  # type: ignore[assignment]
 
     _install_fake_client_user(bot, user_id=9)
 
@@ -464,7 +468,7 @@ async def test_non_facilitator_reaction_logged_only(
     watchdog.cancel.assert_not_called()
 
     # Reflect-message id still present.
-    assert sid in bot._reflect_message_ids
+    assert sess(bot, sid).reflect_message_id is not None
 
     # INFO log emitted.
     assert any("Non-facilitator reaction" in r.message for r in caplog.records)
@@ -483,10 +487,11 @@ async def test_bot_own_reaction_ignored(
     """Reactions from the bot itself are silently ignored."""
     sid = _seed_followup_session(registry, facilitator_id=111)
 
-    bot._reflect_message_ids[sid] = 88888
+    bot._rt.session(sid).reflect_message_id = 88888
     watchdog = MagicMock()
     watchdog.cancel = MagicMock()
-    bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
+    watchdog.done = MagicMock(return_value=False)
+    bot._rt.session(sid).watchdog_task = watchdog  # type: ignore[assignment]
 
     _install_fake_client_user(bot, user_id=42)  # bot's own id
 
@@ -504,7 +509,7 @@ async def test_bot_own_reaction_ignored(
     assert session.state == SessionState.FOLLOWUP
 
     watchdog.cancel.assert_not_called()
-    assert sid in bot._reflect_message_ids
+    assert sess(bot, sid).reflect_message_id is not None
 
 
 # ---------------------------------------------------------------------------
@@ -520,10 +525,11 @@ async def test_unrelated_emoji_on_reflect_message_ignored(
     """An emoji like 🎉 from any participant on the Reflect message is ignored."""
     sid = _seed_followup_session(registry, facilitator_id=111)
 
-    bot._reflect_message_ids[sid] = 99990
+    bot._rt.session(sid).reflect_message_id = 99990
     watchdog = MagicMock()
     watchdog.cancel = MagicMock()
-    bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
+    watchdog.done = MagicMock(return_value=False)
+    bot._rt.session(sid).watchdog_task = watchdog  # type: ignore[assignment]
 
     _install_fake_client_user(bot, user_id=9)
 
@@ -540,7 +546,7 @@ async def test_unrelated_emoji_on_reflect_message_ignored(
     assert session.state == SessionState.FOLLOWUP
 
     watchdog.cancel.assert_not_called()
-    assert sid in bot._reflect_message_ids
+    assert sess(bot, sid).reflect_message_id is not None
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +559,7 @@ async def test_reaction_on_non_session_message_ignored(
     bot: TeaModeBot,
     registry: SessionRegistry,
 ) -> None:
-    """A reaction on a message id not in _reflect_message_ids returns immediately."""
+    """A reaction on a message id that is no session's Reflect message returns immediately."""
     # No reflect message ids registered.
     _install_fake_client_user(bot, user_id=9)
 
@@ -567,7 +573,7 @@ async def test_reaction_on_non_session_message_ignored(
     await bot.on_raw_reaction_add(payload)  # type: ignore[arg-type]
 
     # Nothing in registry since we never seeded.
-    assert len(bot._reflect_message_ids) == 0
+    assert bot._rt.sessions == {}
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +629,7 @@ async def test_watchdog_fires_marks_followup_timeout(
     assert session.state == SessionState.FOLLOWUP_TIMEOUT
 
     # Reflect-message id popped.
-    assert sid not in bot._reflect_message_ids
+    assert sess(bot, sid).reflect_message_id is None
 
 
 # ---------------------------------------------------------------------------

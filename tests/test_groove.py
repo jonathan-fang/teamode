@@ -32,6 +32,7 @@ from app.discord_bot import TeaModeBot
 from app.discord_bot.breaks import _ChainState
 from app.discord_bot.views import IntentionModal, _EditState
 from app.session import Session, SessionMode, SessionRegistry, SessionState
+from tests.runtime_helpers import chan, sess
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -321,7 +322,7 @@ async def test_go_again_keeps_groove_mode(
     bot: TeaModeBot, registry: SessionRegistry
 ) -> None:
     sid = _seed_groove(registry, state=SessionState.FOLLOWUP)
-    bot._chain_states[444] = _ChainState(
+    bot._rt.channel(444).chain = _ChainState(
         session_id=sid, channel_id=444, message_id=1, kind="chain"
     )
     inter = _make_text_interaction()
@@ -362,7 +363,7 @@ async def test_groove_modal_submit_skips_voice(
     mock_status.assert_not_called()
     assert _get(registry, sid).state == SessionState.ACTIVE
     assert channel.send.call_count == 1  # the timer message
-    assert sid not in bot._voice_clients
+    assert sess(bot, sid).voice_client is None
     assert fetch_session_participants(conn, session_id=sid) == [("111", False)]
 
 
@@ -373,7 +374,7 @@ async def test_groove_nudge_plays_wind_chime_locally(
     sid = _seed_groove(registry, state=SessionState.ACTIVE)
     fake_msg = AsyncMock()
     fake_msg.channel = AsyncMock(spec=discord.TextChannel)
-    bot._edit_states[sid] = _EditState(message=fake_msg)
+    bot._rt.session(sid).edit_state = _EditState(message=fake_msg)
 
     with (
         patch("app.discord_bot.timer.spawn_logged") as mock_spawn,
@@ -420,8 +421,8 @@ async def test_groove_end_of_session_plays_locally_and_pings(
     assert sends[0].kwargs["content"] == END_OF_SESSION_NO_MENTION
     assert sends[1].args[0] == GROOVE_END_PING.format(mention="<@111>")
     assert sends[1].kwargs["allowed_mentions"].users is True
-    assert bot._channel_cleanup[444].ping_id == 2
-    assert bot._reflect_message_ids[sid] == 3
+    assert chan(bot, 444).cleanup.ping_id == 2
+    assert sess(bot, sid).reflect_message_id == 3
 
 
 def test_groove_ping_is_clear_eligible() -> None:

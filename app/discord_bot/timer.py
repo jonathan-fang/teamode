@@ -14,8 +14,9 @@ from app.constants import (
     WRAP_UP_MINUTES,
 )
 from app.discord_bot.tasks import spawn_logged
-from app.discord_bot.views import _build_timer_message, _EditState, _SetupMessages
-from app.session import SessionMode, SessionRegistry, SessionState
+from app.discord_bot.runtime import RuntimeStore, SessionRuntime
+from app.discord_bot.views import _build_timer_message, _EditState
+from app.session import Session, SessionMode, SessionRegistry, SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +26,8 @@ class TimerMixin:
 
     # Attributes provided by TeaModeBot.__init__ — declared here so pyright
     # can type-check the mixin's own methods in isolation.
-    _edit_states: dict[int, _EditState]
     _registry: SessionRegistry
-    _setup_messages: dict[int, _SetupMessages]
-    _voice_clients: dict[int, discord.VoiceClient]
+    _rt: RuntimeStore
 
     async def _on_countdown_tick(self, session_id: int, seconds_remaining: int) -> None:
         """Tick callback injected into ``run_countdown``.
@@ -42,8 +41,9 @@ class TimerMixin:
         Skips the edit if the per-session lock is already held (a previous
         edit is still in flight).  Applies exponential backoff on HTTP 429.
         """
-        edit_state = self._edit_states.get(session_id)
-        if edit_state is None:
+        runtime = self._rt.peek_session(session_id)
+        edit_state = runtime.edit_state if runtime is not None else None
+        if runtime is None or edit_state is None:
             # Session was cleaned up; nothing to do.
             return
 
@@ -62,48 +62,66 @@ class TimerMixin:
             and session.duration_minutes is not None
             and timer_format.should_nudge(session.duration_minutes, seconds_remaining)
         ):
-            # Re-check liveness at fire time — never nudge a session that
-            # has since left ACTIVE (e.g. cancelled via solo grace).
-            live_session = self._registry.get(session_id)
-            if live_session is not None and live_session.state == SessionState.ACTIVE:
-                edit_state.nudge_sent = True
-                channel = getattr(edit_state.message, "channel", None)
-                if channel is not None:
-                    try:
-                        nudge_message = await channel.send(
-                            timer_format.format_wrap_up_nudge(WRAP_UP_MINUTES)
-                        )
-                    except discord.HTTPException:
-                        logger.warning(
-                            "Failed to send wrap-up nudge for session %s", session_id
-                        )
-                    else:
-                        setup = self._setup_messages.get(session_id)
-                        if setup is not None:
-                            setup.nudge_message_id = nudge_message.id
+            await self._send_wrap_up_nudge(session_id, runtime, edit_state)
 
-                # The chime fires only when the nudge fires (above), whether
-                # or not the nudge message send itself succeeded. A Groove
-                # session plays it on the host machine, in the background so
-                # the tick isn't held up for the chime's length.
-                voice_client = self._voice_clients.get(session_id)
-                if live_session.mode == SessionMode.GROOVE:
+        if self._should_skip_edit(session_id, edit_state, seconds_remaining):
+            return
+        await self._edit_timer_message(
+            session_id, session, edit_state, seconds_remaining
+        )
 
-                    async def _local_chime() -> None:
-                        await local_audio.play(voice.WIND_CHIME_PATH)
+    async def _send_wrap_up_nudge(
+        self, session_id: int, runtime: SessionRuntime, edit_state: _EditState
+    ) -> None:
+        """Post the wrap-up nudge and play the wind chime, once, if the
+        session is still ACTIVE."""
+        # Re-check liveness at fire time — never nudge a session that
+        # has since left ACTIVE (e.g. cancelled via solo grace).
+        live_session = self._registry.get(session_id)
+        if live_session is None or live_session.state != SessionState.ACTIVE:
+            return
+        edit_state.nudge_sent = True
+        channel = getattr(edit_state.message, "channel", None)
+        if channel is not None:
+            try:
+                nudge_message = await channel.send(
+                    timer_format.format_wrap_up_nudge(WRAP_UP_MINUTES)
+                )
+            except discord.HTTPException:
+                logger.warning(
+                    "Failed to send wrap-up nudge for session %s", session_id
+                )
+            else:
+                if runtime.setup is not None:
+                    runtime.setup.nudge_message_id = nudge_message.id
 
-                    spawn_logged(_local_chime(), name=f"groove-wind-chime:{session_id}")
-                elif voice_client is None:
-                    logger.warning(
-                        "No voice client for session %s — skipping wind chime",
-                        session_id,
-                    )
-                else:
-                    voice.play_wind_chime(voice_client)
+        # The chime fires only when the nudge fires (above), whether
+        # or not the nudge message send itself succeeded. A Groove
+        # session plays it on the host machine, in the background so
+        # the tick isn't held up for the chime's length.
+        voice_client = runtime.voice_client
+        if live_session.mode == SessionMode.GROOVE:
 
+            async def _local_chime() -> None:
+                await local_audio.play(voice.WIND_CHIME_PATH)
+
+            spawn_logged(_local_chime(), name=f"groove-wind-chime:{session_id}")
+        elif voice_client is None:
+            logger.warning(
+                "No voice client for session %s — skipping wind chime",
+                session_id,
+            )
+        else:
+            voice.play_wind_chime(voice_client)
+
+    def _should_skip_edit(
+        self, session_id: int, edit_state: _EditState, seconds_remaining: int
+    ) -> bool:
+        """Whether this tick must not edit the timer message: off the edit
+        cadence, inside the 429 backoff floor, or an edit still in flight."""
         # Only edit on 10-second boundaries and at zero.
         if seconds_remaining % EDIT_INTERVAL_SECONDS != 0 and seconds_remaining != 0:
-            return
+            return True
 
         # 429 backoff gate: skip edits until backoff_floor seconds have
         # elapsed since the last 429. seconds_remaining counts down ~1 per
@@ -119,7 +137,7 @@ class TimerMixin:
                     session_id,
                     seconds_remaining,
                 )
-                return
+                return True
 
         # Skip if a previous edit is still in flight. run_countdown awaits
         # on_tick inline (no concurrent ticks in production), so this never
@@ -131,8 +149,19 @@ class TimerMixin:
                 session_id,
                 seconds_remaining,
             )
-            return
+            return True
 
+        return False
+
+    async def _edit_timer_message(
+        self,
+        session_id: int,
+        session: Session,
+        edit_state: _EditState,
+        seconds_remaining: int,
+    ) -> None:
+        """Edit the timer message to *seconds_remaining*, adjusting the 429
+        backoff floor on the outcome."""
         async with edit_state.lock:
             # duration_minutes is always set by this point — the session
             # reached ACTIVE via mark_active, which requires it.

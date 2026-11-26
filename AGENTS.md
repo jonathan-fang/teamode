@@ -33,6 +33,7 @@ teamode/                      ← repo root
 │   │   ├── clear.py          ← /teamode-clear
 │   │   ├── stats.py          ← /teamode-stats
 │   │   ├── messages.py       ← best_effort() for message delete/edit calls
+│   │   ├── runtime.py        ← in-memory per-session / per-channel state
 │   │   └── tasks.py          ← background-task helpers
 │   ├── constants.py          ← every tunable + every Discord-facing string
 │   ├── config.py             ← env var loading (no discord import)
@@ -133,6 +134,7 @@ and the single-instance PID lock, respectively.
 | `app/discord_bot/breaks.py` | Chaining and break flow |
 | `app/discord_bot/clear.py` | `/teamode-clear` |
 | `app/discord_bot/stats.py` | `/teamode-stats` |
+| `app/discord_bot/runtime.py` | In-memory per-session and per-channel state (`SessionRuntime`, `ChannelRuntime`) |
 | `app/constants.py` | Every tunable + every Discord-facing string |
 | `app/config.py` | Env var loading |
 | `app/session.py` | Session state machine (testable without Discord) |

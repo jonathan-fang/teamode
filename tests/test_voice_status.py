@@ -391,10 +391,11 @@ async def test_completed_reaction_does_not_change_voice_status(
     registry.mark_active(session_id=sid)
     registry.mark_followup(session_id=sid)
 
-    bot._reflect_message_ids[sid] = 55555
+    bot._rt.session(sid).reflect_message_id = 55555
     watchdog = MagicMock()
     watchdog.cancel = MagicMock()
-    bot._watchdog_tasks[sid] = watchdog  # type: ignore[assignment]
+    watchdog.done = MagicMock(return_value=False)
+    bot._rt.session(sid).watchdog_task = watchdog  # type: ignore[assignment]
 
     fake_client = MagicMock(spec=discord.Client)
     fake_user = MagicMock()
@@ -451,7 +452,7 @@ async def test_solo_grace_timeout_sets_cancelled_status_before_disconnect(
     fake_voice_channel = _fake_voice_channel(444)
     fake_voice_client = MagicMock(spec=discord.VoiceClient)
     fake_voice_client.channel = fake_voice_channel
-    bot._voice_clients[sid] = fake_voice_client
+    bot._rt.session(sid).voice_client = fake_voice_client
 
     call_order: list[str] = []
 
@@ -497,7 +498,7 @@ async def test_pending_expiry_does_not_set_voice_status(
 
     from app.discord_bot.views import _SetupMessages
 
-    bot._setup_messages[sid] = _SetupMessages(channel_id=333, welcome_message_id=999)
+    bot._rt.session(sid).setup = _SetupMessages(channel_id=333, welcome_message_id=999)
 
     await bot._run_pending_expiry(session_id=sid, sleep_seconds=0)
 

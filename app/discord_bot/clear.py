@@ -18,9 +18,8 @@ from app.constants import (
     CLEAR_SCAN_LIMIT,
     MSG_WRONG_CHANNEL,
 )
-from app.discord_bot.breaks import _BreakState, _ChainState
 from app.discord_bot.messages import best_effort
-from app.discord_bot.views import _ChannelCleanup, _EditState, _SetupMessages
+from app.discord_bot.runtime import RuntimeStore
 from app.session import SessionRegistry
 
 logger = logging.getLogger(__name__)
@@ -34,12 +33,7 @@ class ClearMixin:
     client: discord.Client
     tree: app_commands.CommandTree
     _registry: SessionRegistry
-    _edit_states: dict[int, _EditState]
-    _setup_messages: dict[int, _SetupMessages]
-    _reflect_message_ids: dict[int, int]
-    _channel_cleanup: dict[int, _ChannelCleanup]
-    _chain_states: dict[int, _ChainState]
-    _break_states: dict[int, _BreakState]
+    _rt: RuntimeStore
 
     def _register_clear_command(self) -> None:
         """Register /clear on the command tree."""
@@ -63,23 +57,25 @@ class ClearMixin:
         this channel.
 
         While the channel has a non-terminal session, its
-        ``_channel_cleanup`` entry (if any) is also protected: a FOLLOWUP
+        ``ChannelRuntime.cleanup`` ids are also protected: a FOLLOWUP
         session's Time's up id can be reachable only via
-        ``_channel_cleanup`` (set by the end-of-session sequence), so this
+        ``ChannelRuntime.cleanup`` (set by the end-of-session sequence), so this
         guards it until the *next* session start consumes/clears it —
         past that point (no non-terminal session in the channel), those
         ids belong to a finished session and are eligible for deletion.
         """
         protected: set[int] = set()
+        channel_runtime = self._rt.peek_channel(channel_id)
 
         session = self._registry.find_active_in_text_channel(str(channel_id))
-        if session is not None:
-            sid = session.session_id
-            edit_state = self._edit_states.get(sid)
-            if edit_state is not None:
-                protected.add(edit_state.message.id)
+        runtime = (
+            self._rt.peek_session(session.session_id) if session is not None else None
+        )
+        if runtime is not None:
+            if runtime.edit_state is not None:
+                protected.add(runtime.edit_state.message.id)
 
-            setup = self._setup_messages.get(sid)
+            setup = runtime.setup
             if setup is not None:
                 for message_id in (
                     setup.welcome_message_id,
@@ -89,27 +85,24 @@ class ClearMixin:
                     if message_id is not None:
                         protected.add(message_id)
 
-            reflect_id = self._reflect_message_ids.get(sid)
-            if reflect_id is not None:
-                protected.add(reflect_id)
+            if runtime.reflect_message_id is not None:
+                protected.add(runtime.reflect_message_id)
 
-            cleanup = self._channel_cleanup.get(channel_id)
-            if cleanup is not None:
-                for message_id in (
-                    cleanup.times_up_id,
-                    cleanup.reflect_id,
-                    cleanup.why_id,
-                ):
-                    if message_id is not None:
-                        protected.add(message_id)
+        if session is not None and channel_runtime is not None:
+            cleanup = channel_runtime.cleanup
+            for message_id in (
+                cleanup.times_up_id,
+                cleanup.reflect_id,
+                cleanup.why_id,
+            ):
+                if message_id is not None:
+                    protected.add(message_id)
 
-        chain = self._chain_states.get(channel_id)
-        if chain is not None:
-            protected.add(chain.message_id)
-
-        break_state = self._break_states.get(channel_id)
-        if break_state is not None:
-            protected.add(break_state.message_id)
+        if channel_runtime is not None:
+            if channel_runtime.chain is not None:
+                protected.add(channel_runtime.chain.message_id)
+            if channel_runtime.break_state is not None:
+                protected.add(channel_runtime.break_state.message_id)
 
         return protected
 
@@ -166,11 +159,12 @@ class ClearMixin:
                 continue
 
             deleted_count += 1
-            # The message is gone — clear any _channel_cleanup field that
-            # pointed at it, so the next session start doesn't try to
-            # delete/edit a message that no longer exists.
-            cleanup = self._channel_cleanup.get(channel_id)
-            if cleanup is not None:
+            # The message is gone — clear any cleanup field that pointed at
+            # it, so the next session start doesn't try to delete/edit a
+            # message that no longer exists.
+            channel_runtime = self._rt.peek_channel(channel_id)
+            if channel_runtime is not None:
+                cleanup = channel_runtime.cleanup
                 if cleanup.times_up_id == message.id:
                     cleanup.times_up_id = None
                 if cleanup.reflect_id == message.id:

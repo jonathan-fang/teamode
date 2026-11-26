@@ -27,6 +27,7 @@ from app.discord_bot import TeaModeBot
 from app.discord_bot.views import COLORS, _EditState, _SetupMessages
 from app.db import init_db
 from app.session import SessionRegistry
+from tests.runtime_helpers import must, sess
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +53,7 @@ def bot(conn: sqlite3.Connection, registry: SessionRegistry) -> TeaModeBot:
 def _seed_active_session(
     registry: SessionRegistry, bot: TeaModeBot
 ) -> tuple[int, MagicMock]:
-    """Create an ACTIVE session and stash a fake message in bot._edit_states.
+    """Create an ACTIVE session and stash a fake message as its edit state.
 
     Returns (session_id, fake_message).
     """
@@ -68,7 +69,7 @@ def _seed_active_session(
     registry.mark_active(session_id=session_id)
 
     fake_msg = AsyncMock(spec=discord.Message)
-    bot._edit_states[session_id] = _EditState(message=fake_msg)
+    bot._rt.session(session_id).edit_state = _EditState(message=fake_msg)
 
     return session_id, fake_msg
 
@@ -101,8 +102,7 @@ async def test_edit_skip_when_lock_held(
 ) -> None:
     """When the per-session lock is held, the edit is skipped (no message.edit call)."""
     session_id, fake_msg = _seed_active_session(registry, bot)
-    edit_state = bot._edit_states[session_id]
-
+    edit_state = must(sess(bot, session_id).edit_state)
     # Acquire the lock to simulate an in-flight edit.
     async with edit_state.lock:
         # Now fire a tick that would normally trigger an edit.
@@ -123,8 +123,7 @@ async def test_429_doubles_backoff_floor(
 ) -> None:
     """A 429 response doubles the backoff floor (up to the cap)."""
     session_id, fake_msg = _seed_active_session(registry, bot)
-    edit_state = bot._edit_states[session_id]
-
+    edit_state = must(sess(bot, session_id).edit_state)
     assert edit_state.backoff_floor == BACKOFF_FLOOR_DEFAULT
 
     # Simulate a 429 HTTPException from message.edit.
@@ -144,8 +143,7 @@ async def test_429_backoff_decays_on_success(
 ) -> None:
     """After a 429 hit, a successful edit decays the backoff floor back to default."""
     session_id, fake_msg = _seed_active_session(registry, bot)
-    edit_state = bot._edit_states[session_id]
-
+    edit_state = must(sess(bot, session_id).edit_state)
     # First tick: 429 → doubles floor.
     rate_limit_exc = discord.HTTPException(MagicMock(status=429), "rate limited")
     rate_limit_exc.status = 429
@@ -167,8 +165,7 @@ async def test_429_backoff_capped_at_maximum(
 ) -> None:
     """Repeated 429s do not push the backoff floor above BACKOFF_FLOOR_CAP."""
     session_id, fake_msg = _seed_active_session(registry, bot)
-    edit_state = bot._edit_states[session_id]
-
+    edit_state = must(sess(bot, session_id).edit_state)
     rate_limit_exc = discord.HTTPException(MagicMock(status=429), "rate limited")
     rate_limit_exc.status = 429
     fake_msg.edit.side_effect = rate_limit_exc
@@ -271,7 +268,7 @@ async def test_nudge_never_fires_for_short_session(
     fake_msg = AsyncMock(spec=discord.Message)
     fake_channel = AsyncMock(spec=discord.TextChannel)
     fake_msg.channel = fake_channel
-    bot._edit_states[session_id] = _EditState(message=fake_msg)
+    bot._rt.session(session_id).edit_state = _EditState(message=fake_msg)
 
     trigger = WRAP_UP_MINUTES * 60
     for seconds_remaining in range(trigger + 20, -1, -1):
@@ -330,7 +327,7 @@ async def test_nudge_plays_wind_chime_on_voice_client(
     fake_voice_client = MagicMock(spec=discord.VoiceClient)
     fake_voice_client.is_connected.return_value = True
     fake_voice_client.is_playing.return_value = False
-    bot._voice_clients[session_id] = fake_voice_client
+    bot._rt.session(session_id).voice_client = fake_voice_client
 
     trigger = WRAP_UP_MINUTES * 60
     with patch("app.discord_bot.timer.voice.discord.FFmpegPCMAudio"):
@@ -350,7 +347,7 @@ async def test_no_chime_on_tick_without_nudge(
     fake_msg.channel = fake_channel
 
     fake_voice_client = MagicMock(spec=discord.VoiceClient)
-    bot._voice_clients[session_id] = fake_voice_client
+    bot._rt.session(session_id).voice_client = fake_voice_client
 
     await bot._on_countdown_tick(session_id, seconds_remaining=1200)
 
@@ -378,10 +375,10 @@ async def test_no_chime_for_session_below_nudge_min_duration(
     fake_msg = AsyncMock(spec=discord.Message)
     fake_channel = AsyncMock(spec=discord.TextChannel)
     fake_msg.channel = fake_channel
-    bot._edit_states[session_id] = _EditState(message=fake_msg)
+    bot._rt.session(session_id).edit_state = _EditState(message=fake_msg)
 
     fake_voice_client = MagicMock(spec=discord.VoiceClient)
-    bot._voice_clients[session_id] = fake_voice_client
+    bot._rt.session(session_id).voice_client = fake_voice_client
 
     trigger = WRAP_UP_MINUTES * 60
     await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
@@ -401,7 +398,7 @@ async def test_nudge_chime_failure_does_not_raise_and_session_continues(
 
     fake_voice_client = MagicMock(spec=discord.VoiceClient)
     fake_voice_client.is_connected.return_value = False
-    bot._voice_clients[session_id] = fake_voice_client
+    bot._rt.session(session_id).voice_client = fake_voice_client
 
     trigger = WRAP_UP_MINUTES * 60
     await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
@@ -438,14 +435,14 @@ async def test_nudge_message_id_stored_on_setup_messages(
     fake_nudge_msg.id = 9999
     fake_channel.send = AsyncMock(return_value=fake_nudge_msg)
     fake_msg.channel = fake_channel
-    bot._setup_messages[session_id] = _SetupMessages(
+    bot._rt.session(session_id).setup = _SetupMessages(
         channel_id=333, welcome_message_id=100, intention_message_id=200
     )
 
     trigger = WRAP_UP_MINUTES * 60
     await bot._on_countdown_tick(session_id, seconds_remaining=trigger)
 
-    assert bot._setup_messages[session_id].nudge_message_id == 9999
+    assert must(sess(bot, session_id).setup).nudge_message_id == 9999
 
 
 @pytest.mark.asyncio
@@ -501,7 +498,7 @@ async def test_long_intention_truncated_in_field(
     registry.mark_active(session_id=session_id)
 
     fake_msg = AsyncMock(spec=discord.Message)
-    bot._edit_states[session_id] = _EditState(message=fake_msg)
+    bot._rt.session(session_id).edit_state = _EditState(message=fake_msg)
 
     await bot._on_countdown_tick(session_id, seconds_remaining=1200)
 

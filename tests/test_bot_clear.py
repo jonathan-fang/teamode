@@ -6,7 +6,7 @@ Covers: permission refusal, wrong-channel refusal, scan depth
 Reflect, each chain-prompt kind, an in-progress break), eligible past
 messages deleted, ephemeral defer, ``CLEAR_DONE``/``CLEAR_NOTHING``
 replies, an individual delete failure logged and skipped without
-stopping the rest, and ``_channel_cleanup`` fields cleared for deleted ids.
+stopping the rest, and ``ChannelRuntime.cleanup`` fields cleared for deleted ids.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from app.discord_bot import TeaModeBot
 from app.discord_bot.breaks import _BreakState, _ChainState
 from app.discord_bot.views import _ChannelCleanup, _EditState, _SetupMessages
 from app.session import SessionRegistry
+from tests.runtime_helpers import chan
 
 # ---------------------------------------------------------------------------
 # Fixtures and fakes
@@ -165,8 +166,8 @@ def _seed_active_session(
 
     timer_message = MagicMock()
     timer_message.id = timer_message_id
-    bot._edit_states[sid] = _EditState(message=timer_message)
-    bot._setup_messages[sid] = _SetupMessages(
+    bot._rt.session(sid).edit_state = _EditState(message=timer_message)
+    bot._rt.session(sid).setup = _SetupMessages(
         channel_id=channel_id,
         welcome_message_id=welcome_id,
         intention_message_id=intention_id,
@@ -193,7 +194,7 @@ def _seed_followup_session(
     registry.set_intention(session_id=sid, intention="write tests")
     registry.mark_active(session_id=sid)
     registry.mark_followup(session_id=sid)
-    bot._reflect_message_ids[sid] = reflect_message_id
+    bot._rt.session(sid).reflect_message_id = reflect_message_id
     return sid
 
 
@@ -339,7 +340,7 @@ async def test_live_chain_prompt_is_kept_for_every_kind(
     bot: TeaModeBot, kind: str
 ) -> None:
     channel_id = 333
-    bot._chain_states[channel_id] = _ChainState(
+    bot._rt.channel(channel_id).chain = _ChainState(
         session_id=1,
         channel_id=channel_id,
         message_id=55,
@@ -360,7 +361,7 @@ async def test_live_break_message_is_kept(bot: TeaModeBot) -> None:
     from datetime import datetime, timezone
 
     task = MagicMock()
-    bot._break_states[channel_id] = _BreakState(
+    bot._rt.channel(channel_id).break_state = _BreakState(
         task=task,
         message_id=77,
         end_time=datetime.now(timezone.utc),
@@ -450,7 +451,7 @@ async def test_channel_cleanup_fields_cleared_for_deleted_ids(
     bot: TeaModeBot,
 ) -> None:
     channel_id = 333
-    bot._channel_cleanup[channel_id] = _ChannelCleanup(
+    bot._rt.channel(channel_id).cleanup = _ChannelCleanup(
         times_up_id=2, reflect_id=3, why_id=None
     )
     times_up_msg = FakeMessage(2, content="Time's up!", embed_titles=[END_EMBED_TITLE])
@@ -460,7 +461,7 @@ async def test_channel_cleanup_fields_cleared_for_deleted_ids(
 
     await bot._handle_clear(interaction)
 
-    cleanup = bot._channel_cleanup[channel_id]
+    cleanup = chan(bot, channel_id).cleanup
     assert cleanup.times_up_id is None
     assert cleanup.reflect_id is None
 

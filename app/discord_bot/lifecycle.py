@@ -37,19 +37,18 @@ from app.constants import (
     VOICE_STATUS_FINISHED,
 )
 from app.discord_bot.messages import best_effort
+from app.discord_bot.runtime import RuntimeStore
 from app.discord_bot.tasks import spawn_logged
 from app.discord_bot.views import (
     COLORS,
+    VoiceMembersChannel,
     _build_interrupted_record_content,
     _build_session_record_content,
     _build_timer_view,
     _build_welcome_embed,
-    _ChannelCleanup,
-    _EditState,
     _now,
-    _SetupMessages,
 )
-from app.session import SessionMode, SessionRegistry, SessionState
+from app.session import Session, SessionMode, SessionRegistry, SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -64,25 +63,16 @@ class LifecycleMixin:
     # can type-check the mixin's own methods in isolation.
     client: discord.Client
     _registry: SessionRegistry
-    _reflect_message_ids: dict[int, int]
-    _watchdog_tasks: dict[int, asyncio.Task[None]]
-    _solo_grace_tasks: dict[int, asyncio.Task[None]]
-    _countdown_tasks: dict[int, asyncio.Task[None]]
-    _voice_clients: dict[int, discord.VoiceClient]
-    _edit_states: dict[int, _EditState]
-    _pending_expiry_tasks: dict[int, asyncio.Task[None]]
-    _setup_messages: dict[int, _SetupMessages]
-    _channel_cleanup: dict[int, _ChannelCleanup]
+    _rt: RuntimeStore
 
     if TYPE_CHECKING:
         # Provided by BreakMixin — declared here, type-checking only, so
         # pyright can check this mixin's own methods in isolation.
         async def _post_chain_prompt(
-            self, session_id: int, text_channel_id: str
+            self, session_id: int, text_channel_id: str, *, chained: bool
         ) -> None: ...
 
         def _reset_streak(self, channel_id: int) -> None: ...
-        def _pop_chained_flag(self, session_id: int) -> bool: ...
 
     # ------------------------------------------------------------------
     # Voice channel status
@@ -147,18 +137,16 @@ class LifecycleMixin:
         *,
         delete_setup_messages: bool = True,
     ) -> None:
-        """Cancel/clear every per-session background task and in-memory
-        state entry for *session_id*, and (usually) delete its setup
-        messages.
+        """Drop *session_id*'s runtime (cancelling its background tasks) and
+        (usually) delete its setup messages.
 
         Called at every terminal transition. ``delete_setup_messages=True``
         (the default) deletes the welcome, Set-Intention, and (if it
         fired) wrap-up nudge messages via the channel — used by every
         terminal path except pending expiry, which edits the welcome
         message in place instead and passes
-        ``delete_setup_messages=False``. Idempotent: each pop is a no-op
-        when the key is already gone, so callers that already did some of
-        this cleanup themselves are safe to call it again.
+        ``delete_setup_messages=False``. Idempotent: a second call finds no
+        runtime and does nothing.
 
         Voice status is not set here: it can only be set while Ocha is
         connected to the voice channel (see ``_set_voice_status``), and by
@@ -167,24 +155,13 @@ class LifecycleMixin:
         set on the way to a terminal state (Finished, solo-grace Cancelled)
         set it themselves before disconnecting.
         """
-        current = asyncio.current_task()
-        for task_map in (
-            self._pending_expiry_tasks,
-            self._watchdog_tasks,
-            self._solo_grace_tasks,
-            self._countdown_tasks,
-        ):
-            task = task_map.pop(session_id, None)
-            if task is not None and task is not current and not task.done():
-                task.cancel()
-        self._edit_states.pop(session_id, None)
-        self._voice_clients.pop(session_id, None)
-
-        if not delete_setup_messages:
+        runtime = self._rt.pop_session(session_id)
+        if runtime is None:
             return
+        runtime.cancel_tasks(keep=asyncio.current_task())
 
-        setup = self._setup_messages.pop(session_id, None)
-        if setup is None:
+        setup = runtime.setup
+        if not delete_setup_messages or setup is None:
             return
 
         channel = self.client.get_channel(setup.channel_id)
@@ -329,7 +306,7 @@ class LifecycleMixin:
             self._run_pending_expiry(session_id=session_id),
             name=f"pending-expiry:{session_id}",
         )
-        self._pending_expiry_tasks[session_id] = task
+        self._rt.session(session_id).pending_expiry_task = task
 
     async def _run_pending_expiry(
         self,
@@ -339,7 +316,7 @@ class LifecycleMixin:
     ) -> None:
         """Cancel *session_id* if it is still PENDING after *sleep_seconds*.
 
-        Cancelled (via ``_pending_expiry_tasks[session_id].cancel()``) once
+        Cancelled (via ``SessionRuntime.pending_expiry_task``) once
         the intention is submitted — see ``IntentionModal.on_submit``. This
         is the one terminal path that edits the welcome message rather than
         deleting it (deletion is for the messages of a session that
@@ -357,9 +334,9 @@ class LifecycleMixin:
 
         self._registry.mark_cancelled(session_id=session_id)
         self._reset_streak(int(session.text_channel_id))
-        self._pop_chained_flag(session_id)
 
-        setup = self._setup_messages.get(session_id)
+        runtime = self._rt.peek_session(session_id)
+        setup = runtime.setup if runtime is not None else None
         if setup is not None:
             channel = self.client.get_channel(setup.channel_id)
             if isinstance(channel, (discord.VoiceChannel, discord.TextChannel)):
@@ -409,37 +386,7 @@ class LifecycleMixin:
         plays the reverie on the host machine instead, and follows it with
         a ``GROOVE_END_PING`` @-mention of the facilitator.
         """
-        # Step 0: finalize the timer message — strip its embed and rewrite
-        # the content to a compact plain-text record (intention, duration +
-        # facilitator, range), so what persists in the channel long-term
-        # isn't a lingering fielded embed. Best-effort: a failure here must
-        # not block the rest of end-of-session. edit_state/session can be
-        # missing under unusual orderings (e.g. cleaned up concurrently) —
-        # skip finalization rather than raise.
-        edit_state = self._edit_states.pop(session_id, None)
-        session_for_record = self._registry.get(session_id)
-        if edit_state is not None and session_for_record is not None:
-            assert session_for_record.duration_minutes is not None
-            record_content = _build_session_record_content(
-                intention=session_for_record.intention,
-                duration_minutes=session_for_record.duration_minutes,
-                facilitator_id=(
-                    session_for_record.handoff_facilitator_id
-                    or session_for_record.facilitator_id
-                ),
-                started_at=edit_state.started_at,
-            )
-            try:
-                await edit_state.message.edit(
-                    content=record_content,
-                    embed=None,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-            except discord.HTTPException:
-                logger.warning(
-                    "Failed to finalize timer message to session record for session %s",
-                    session_id,
-                )
+        await self._finalize_timer_record(session_id)
 
         if channel is None:
             logger.warning(
@@ -448,15 +395,72 @@ class LifecycleMixin:
             )
             return
 
-        # Step a: Snapshot voice channel members (excluding the bot).
+        # In-memory cleanup ids are keyed by the text channel, when it has one.
+        channel_id: int | None = getattr(channel, "id", None)
+        session = self._registry.get(session_id)
+
+        await self._post_times_up(
+            session_id, session, voice_client, channel, channel_id
+        )
+        await self._play_end_chime(
+            session_id, session, voice_client, channel, channel_id
+        )
+        await self._post_reflect(session_id, channel, channel_id)
+        self._rt.session(session_id).watchdog_task = spawn_logged(
+            self._run_followup_watchdog(session_id),
+            name=f"followup-watchdog:{session_id}",
+        )
+
+    async def _finalize_timer_record(self, session_id: int) -> None:
+        """Rewrite the timer message to a compact plain-text session record.
+
+        Strips its embed and rewrites the content (intention, duration +
+        facilitator, range), so what persists in the channel long-term
+        isn't a lingering fielded embed. Best-effort: a failure here must
+        not block the rest of end-of-session. The edit state or session can
+        be missing under unusual orderings (e.g. cleaned up concurrently) —
+        finalization is skipped then rather than raising.
+        """
+        runtime = self._rt.peek_session(session_id)
+        edit_state = runtime.edit_state if runtime is not None else None
+        if runtime is not None:
+            runtime.edit_state = None
+        session = self._registry.get(session_id)
+        if edit_state is None or session is None:
+            return
+        assert session.duration_minutes is not None
+        record_content = _build_session_record_content(
+            intention=session.intention,
+            duration_minutes=session.duration_minutes,
+            facilitator_id=session.handoff_facilitator_id or session.facilitator_id,
+            started_at=edit_state.started_at,
+        )
+        try:
+            await edit_state.message.edit(
+                content=record_content,
+                embed=None,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            logger.warning(
+                "Failed to finalize timer message to session record for session %s",
+                session_id,
+            )
+
+    async def _post_times_up(
+        self,
+        session_id: int,
+        session: Session | None,
+        voice_client: discord.VoiceClient | None,
+        channel: discord.abc.Messageable,
+        channel_id: int | None,
+    ) -> None:
+        """Post Time's up (@-mentioning the voice members), then set the
+        Finished voice status, and remember the message for cleanup."""
         voice_channel = voice_client.channel if voice_client is not None else None
         if isinstance(voice_channel, discord.VoiceChannel):
-            members = [
-                m
-                for m in voice_channel.members
-                if not m.bot
-                and m.id != (self.client.user.id if self.client.user else None)
-            ]
+            bot_id = self.client.user.id if self.client.user else None
+            members = [m for m in voice_channel.members if not m.bot and m.id != bot_id]
         else:
             members = []
 
@@ -466,7 +470,6 @@ class LifecycleMixin:
         else:
             mention_content = END_OF_SESSION_NO_MENTION
 
-        # Step b: Post Session-complete embed with the @-mention content.
         session_complete_embed = discord.Embed(
             title=END_EMBED_TITLE,
             description=f"### {END_EMBED_BODY}",
@@ -477,7 +480,6 @@ class LifecycleMixin:
         )
 
         # Set the Finished voice status now that Time's up has posted.
-        session = self._registry.get(session_id)
         if session is not None and session.mode == SessionMode.VOICE:
             await self._set_voice_status(
                 int(session.voice_channel_id),
@@ -489,13 +491,19 @@ class LifecycleMixin:
         # Remember this "Time's up" message so the *next* /teamode invoked
         # in the same text channel can delete it (see CommandsMixin —
         # in-memory only, lost on restart, which is accepted).
-        channel_id = getattr(channel, "id", None)
         if channel_id is not None:
-            cleanup = self._channel_cleanup.setdefault(channel_id, _ChannelCleanup())
-            cleanup.times_up_id = end_message.id
+            self._rt.channel(channel_id).cleanup.times_up_id = end_message.id
 
-        # Step c: Reverie playback + disconnect (voice), or host-machine
-        # playback + facilitator ping (Groove).
+    async def _play_end_chime(
+        self,
+        session_id: int,
+        session: Session | None,
+        voice_client: discord.VoiceClient | None,
+        channel: discord.abc.Messageable,
+        channel_id: int | None,
+    ) -> None:
+        """Play the reverie and disconnect (voice), or play it on the host
+        machine and ping the facilitator (Groove)."""
         if voice_client is not None:
             playback_ok = await voice.play_reverie_then_disconnect(voice_client)
         else:
@@ -503,71 +511,65 @@ class LifecycleMixin:
         if not playback_ok:
             logger.warning("Reverie playback failed for session %s", session_id)
 
-        if session is not None and session.mode == SessionMode.GROOVE:
-            # In content, not an embed, so the mention actually notifies —
-            # a backup for when the host-machine chime can't be heard.
-            try:
-                ping_message = await channel.send(
-                    GROOVE_END_PING.format(mention=f"<@{session.facilitator_id}>"),
-                    allowed_mentions=discord.AllowedMentions(users=True),
-                )
-            except discord.HTTPException:
-                logger.warning("Failed to send Groove ping for session %s", session_id)
-            else:
-                if channel_id is not None:
-                    cleanup = self._channel_cleanup.setdefault(
-                        channel_id, _ChannelCleanup()
-                    )
-                    cleanup.ping_id = ping_message.id
+        if session is None or session.mode != SessionMode.GROOVE:
+            return
+        # In content, not an embed, so the mention actually notifies — a
+        # backup for when the host-machine chime can't be heard.
+        try:
+            ping_message = await channel.send(
+                GROOVE_END_PING.format(mention=f"<@{session.facilitator_id}>"),
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
+        except discord.HTTPException:
+            logger.warning("Failed to send Groove ping for session %s", session_id)
+            return
+        if channel_id is not None:
+            self._rt.channel(channel_id).cleanup.ping_id = ping_message.id
 
-        # Step d: Post Reflect message with facilitator prompt.
-        facilitator_prompt = FOLLOWUP_PROMPT
+    async def _post_reflect(
+        self,
+        session_id: int,
+        channel: discord.abc.Messageable,
+        channel_id: int | None,
+    ) -> None:
+        """Post the Reflect prompt with its ✅/⛔ reactions, and remember it
+        for the reaction listener and the next session's cleanup (which
+        strips its embed)."""
         reflect_embed = discord.Embed(
             title=REFLECT_EMBED_TITLE,
             description=REFLECT_EMBED_DESCRIPTION,
             color=COLORS["end_of_session"],
         )
-        reflect_msg = await channel.send(
-            content=facilitator_prompt, embed=reflect_embed
-        )
-
-        # Step e: Pre-populate reactions on the Reflect message.
+        reflect_msg = await channel.send(content=FOLLOWUP_PROMPT, embed=reflect_embed)
         await reflect_msg.add_reaction("✅")
         await reflect_msg.add_reaction("⛔")
 
-        # Step f: Store the Reflect message id for the reaction listener, and
-        # for the next session's cleanup (its embed is stripped then).
-        self._reflect_message_ids[session_id] = reflect_msg.id
+        self._rt.session(session_id).reflect_message_id = reflect_msg.id
         if channel_id is not None:
-            cleanup = self._channel_cleanup.setdefault(channel_id, _ChannelCleanup())
-            cleanup.reflect_id = reflect_msg.id
+            self._rt.channel(channel_id).cleanup.reflect_id = reflect_msg.id
 
-        # Step g: 3-minute watchdog.
-        async def _watchdog() -> None:
-            try:
-                await asyncio.sleep(FOLLOWUP_TIMEOUT_SECONDS)
-            except asyncio.CancelledError:
-                return
-            # Watchdog fired — mark timeout and clean up.
-            timed_out_session = self._registry.get(session_id)
-            try:
-                self._registry.mark_followup_timeout(session_id=session_id)
-            except Exception:  # broad on purpose: the cleanup below must still run
-                logger.exception(
-                    "mark_followup_timeout failed for session %s", session_id
-                )
-            if timed_out_session is not None:
-                self._reset_streak(int(timed_out_session.text_channel_id))
-            self._pop_chained_flag(session_id)
-            self._reflect_message_ids.pop(session_id, None)
-            logger.info(
-                "Follow-up watchdog fired for session %s — marked followup_timeout",
-                session_id,
-            )
-            await self._on_session_terminal(session_id)
+    async def _run_followup_watchdog(self, session_id: int) -> None:
+        """Mark *session_id* followup_timeout if no facilitator ✅/⛔ arrives
+        within ``FOLLOWUP_TIMEOUT_SECONDS``.
 
-        task = spawn_logged(_watchdog(), name=f"followup-watchdog:{session_id}")
-        self._watchdog_tasks[session_id] = task
+        Cancelled by the facilitator's reaction (via the terminal cleanup).
+        """
+        try:
+            await asyncio.sleep(FOLLOWUP_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            return
+        timed_out_session = self._registry.get(session_id)
+        try:
+            self._registry.mark_followup_timeout(session_id=session_id)
+        except Exception:  # broad on purpose: the cleanup below must still run
+            logger.exception("mark_followup_timeout failed for session %s", session_id)
+        if timed_out_session is not None:
+            self._reset_streak(int(timed_out_session.text_channel_id))
+        logger.info(
+            "Follow-up watchdog fired for session %s — marked followup_timeout",
+            session_id,
+        )
+        await self._on_session_terminal(session_id)
 
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
@@ -583,11 +585,7 @@ class LifecycleMixin:
             return
 
         # Find the session whose Reflect message matches this payload.
-        session_id: int | None = None
-        for sid, msg_id in self._reflect_message_ids.items():
-            if msg_id == payload.message_id:
-                session_id = sid
-                break
+        session_id = self._rt.session_for_reflect(payload.message_id)
         if session_id is None:
             return
 
@@ -613,13 +611,12 @@ class LifecycleMixin:
             )
             return
 
-        # Facilitator reaction — authoritative answer.
-        task = self._watchdog_tasks.pop(session_id, None)
-        if task is not None:
-            task.cancel()
-
-        # Pop the Reflect-message id to prevent duplicate handling.
-        self._reflect_message_ids.pop(session_id, None)
+        # Facilitator reaction — authoritative answer. Read before
+        # _on_session_terminal drops the runtime (which also cancels the
+        # watchdog and forgets the Reflect id, so a second reaction is
+        # ignored).
+        runtime = self._rt.peek_session(session_id)
+        chained = runtime is not None and runtime.chained_via_go_again
 
         if emoji_str == "✅":
             self._registry.mark_completed(
@@ -628,7 +625,9 @@ class LifecycleMixin:
                 followup_note=None,
             )
             await self._on_session_terminal(session_id)
-            await self._post_chain_prompt(session_id, session.text_channel_id)
+            await self._post_chain_prompt(
+                session_id, session.text_channel_id, chained=chained
+            )
         else:
             # ⛔ — record incomplete, then post the "why" prompt.
             self._registry.mark_completed(
@@ -644,10 +643,7 @@ class LifecycleMixin:
                 )
                 text_channel_id = getattr(channel, "id", None)
                 if text_channel_id is not None:
-                    cleanup = self._channel_cleanup.setdefault(
-                        text_channel_id, _ChannelCleanup()
-                    )
-                    cleanup.why_id = why_message.id
+                    self._rt.channel(text_channel_id).cleanup.why_id = why_message.id
             elif channel is not None:
                 logger.warning(
                     "Channel %s for session %s is not sendable —"
@@ -656,7 +652,9 @@ class LifecycleMixin:
                     session_id,
                 )
             # Chain prompt follows the "why" line, per every path above.
-            await self._post_chain_prompt(session_id, session.text_channel_id)
+            await self._post_chain_prompt(
+                session_id, session.text_channel_id, chained=chained
+            )
 
     async def on_voice_state_update(
         self,
@@ -675,88 +673,92 @@ class LifecycleMixin:
         and no other humans remain, arm the 5-minute solo-grace watchdog. If
         other humans remain, pick a new facilitator at random (auto-handoff).
         """
-        # Detect a join into a voice channel: after.channel is set and either
-        # the member was not in voice before, or they moved to a different channel.
-        if after.channel is not None and (
-            before.channel is None or before.channel.id != after.channel.id
-        ):
-            joined_session = self._registry.find_active_in_voice_channel(
-                str(after.channel.id)
-            )
-            join_bot_id = self.client.user.id if self.client.user else None
-            if (
-                joined_session is not None
-                and joined_session.state is SessionState.ACTIVE
-                and not member.bot
-                and member.id != join_bot_id
-            ):
-                # Late joiner — bookkeeping only, never breaks the flow.
-                try:
-                    self._registry.record_participants(
-                        session_id=joined_session.session_id,
-                        user_ids=[str(member.id)],
-                        joined_late=True,
-                    )
-                except sqlite3.Error:
-                    logger.exception(
-                        "Failed to record late joiner for session %s",
-                        joined_session.session_id,
-                    )
-            if (
-                joined_session is not None
-                and str(member.id) == joined_session.facilitator_id
-                and joined_session.session_id in self._solo_grace_tasks
-            ):
-                # Facilitator rejoined within the grace window — cancel watchdog.
-                task = self._solo_grace_tasks.pop(joined_session.session_id)
-                task.cancel()
-                # No need to await — the watchdog's CancelledError handler cleans up.
+        moved = (
+            before.channel is None
+            or after.channel is None
+            or before.channel.id != after.channel.id
+        )
+        if not moved:
+            return  # Same channel (mute, deafen, ...) — neither join nor leave.
+        if after.channel is not None:
+            self._on_voice_join(member, after.channel.id)
+        if before.channel is not None:
+            await self._on_voice_leave(member, before.channel)
 
-        # Step 1 — Did this member just leave a voice channel?
-        if before.channel is None:
-            return
-        if after.channel is not None and after.channel.id == before.channel.id:
-            return  # Same channel — not a leave event.
-
-        # Step 2 — Is there an in-progress session in the channel they left?
-        session = self._registry.find_active_in_voice_channel(str(before.channel.id))
+    def _on_voice_join(self, member: discord.Member, channel_id: int) -> None:
+        """Record a late joiner, and cancel the solo-grace watchdog when the
+        facilitator rejoins within the grace window."""
+        session = self._registry.find_active_in_voice_channel(str(channel_id))
         if session is None:
             return
 
-        # Step 3 — Is the leaver the current facilitator?
-        if str(member.id) != session.facilitator_id:
+        bot_id = self.client.user.id if self.client.user else None
+        if (
+            session.state is SessionState.ACTIVE
+            and not member.bot
+            and member.id != bot_id
+        ):
+            # Late joiner — bookkeeping only, never breaks the flow.
+            try:
+                self._registry.record_participants(
+                    session_id=session.session_id,
+                    user_ids=[str(member.id)],
+                    joined_late=True,
+                )
+            except sqlite3.Error:
+                logger.exception(
+                    "Failed to record late joiner for session %s", session.session_id
+                )
+
+        runtime = self._rt.peek_session(session.session_id)
+        if (
+            runtime is not None
+            and runtime.solo_grace_task is not None
+            and str(member.id) == session.facilitator_id
+        ):
+            # No need to await — the watchdog's CancelledError handler exits.
+            runtime.solo_grace_task.cancel()
+            runtime.solo_grace_task = None
+
+    async def _on_voice_leave(
+        self, member: discord.Member, left: VoiceMembersChannel
+    ) -> None:
+        """When the facilitator leaves *left* mid-session, arm solo grace
+        (nobody left) or hand the session to someone still there."""
+        session = self._registry.find_active_in_voice_channel(str(left.id))
+        if session is None or str(member.id) != session.facilitator_id:
             return
 
-        # Step 4 — Count remaining human members (exclude the leaver and the bot).
+        # Remaining human members (excluding the leaver and the bot).
         bot_id = self.client.user.id if self.client.user else None
         remaining = [
             m
-            for m in before.channel.members
+            for m in left.members
             if not m.bot and m.id != member.id and m.id != bot_id
         ]
-
-        if not remaining:
-            # Solo leave — arm the 5-minute rejoin watchdog.
-            # Defensive guard: if one is already pending, don't double-arm.
-            if session.session_id not in self._solo_grace_tasks:
-                task = spawn_logged(
-                    self._run_solo_grace(session_id=session.session_id),
-                    name=f"solo-grace:{session.session_id}",
-                )
-                self._solo_grace_tasks[session.session_id] = task
+        if remaining:
+            await self._auto_handoff(session, random.choice(remaining))
             return
 
-        # Step 5 — Pick a new facilitator at random and record the handoff.
-        new_facilitator = random.choice(remaining)
-        old_facilitator_id = (
-            session.facilitator_id
-        )  # snapshot before mark_handoff updates it
+        # Solo leave — arm the 5-minute rejoin watchdog, unless one is
+        # already pending.
+        runtime = self._rt.session(session.session_id)
+        if runtime.solo_grace_task is None:
+            runtime.solo_grace_task = spawn_logged(
+                self._run_solo_grace(session_id=session.session_id),
+                name=f"solo-grace:{session.session_id}",
+            )
+
+    async def _auto_handoff(
+        self, session: Session, new_facilitator: discord.Member
+    ) -> None:
+        """Record *new_facilitator* as the session's facilitator and announce it."""
+        old_facilitator_id = session.facilitator_id  # before mark_handoff
         self._registry.mark_handoff(
             session_id=session.session_id,
             handoff_facilitator_id=str(new_facilitator.id),
         )
 
-        # Step 6 — Announce in the text channel.
         channel = self.client.get_channel(int(session.text_channel_id))
         if isinstance(channel, discord.abc.Messageable):
             content = AUTO_HANDOFF_ANNOUNCE.format(
@@ -801,12 +803,16 @@ class LifecycleMixin:
             # Facilitator rejoined within the grace window — nothing to do.
             return
 
-        # Timeout fired. Resolve resources defensively (pops are no-ops if missing).
+        # Timeout fired. Take the resources off the runtime (it may be gone
+        # already) so no tick edits the timer message after this point.
         timed_out_session = self._registry.get(session_id)
-        countdown_task = self._countdown_tasks.pop(session_id, None)
-        voice_client = self._voice_clients.pop(session_id, None)
-        edit_state = self._edit_states.pop(session_id, None)
-        self._solo_grace_tasks.pop(session_id, None)
+        countdown_task = voice_client = edit_state = None
+        runtime = self._rt.peek_session(session_id)
+        if runtime is not None:
+            countdown_task, runtime.countdown_task = runtime.countdown_task, None
+            voice_client, runtime.voice_client = runtime.voice_client, None
+            edit_state, runtime.edit_state = runtime.edit_state, None
+            runtime.solo_grace_task = None
 
         # 1) Cancel the countdown task so it doesn't trigger end-of-session.
         if countdown_task is not None:
@@ -821,7 +827,7 @@ class LifecycleMixin:
         # 2) Rewrite the timer message: freeze the last embed but recolor it
         # muted red (COLORS["crashed"]) so it no longer looks live, and swap
         # the content to the solo-grace-ended message — no further edits
-        # follow (the edit state is already popped above).
+        # follow (the edit state was taken above).
         if edit_state is not None:
             frozen_embed: discord.Embed | None = None
             if edit_state.message.embeds:
@@ -866,6 +872,5 @@ class LifecycleMixin:
         # 6) Reset the channel's streak — a cancelled session breaks the chain.
         if timed_out_session is not None:
             self._reset_streak(int(timed_out_session.text_channel_id))
-        self._pop_chained_flag(session_id)
 
         await self._on_session_terminal(session_id)
