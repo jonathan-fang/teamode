@@ -62,6 +62,10 @@ interaction handler can dispatch (e.g. `teamode:timer:25`,
 `teamode:followup:yes`). Bake the session id in for multi-session safety
 (`teamode:<session_id>:timer:25`).
 
+As built: presets use `teamode:<session_id>:timer:<minutes>`; the Custom and
+Until… buttons use `teamode:<session_id>:timer:custom` and
+`teamode:<session_id>:timer:until` and open a duration-entry modal instead.
+
 ---
 
 ## Voice Audio Playback (the `reverie.wav` ring)

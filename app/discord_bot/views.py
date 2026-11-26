@@ -22,21 +22,30 @@ from app.constants import (
     COLOR_MUTED_RED,
     COLOR_OOLONG_AMBER,
     COLOR_STEEPING_FOREST,
+    CUSTOM_MAX_MINUTES,
+    CUSTOM_MIN_MINUTES,
+    CUSTOM_MINUTES_LABEL,
+    CUSTOM_MINUTES_PLACEHOLDER,
     DURATIONS_MINUTES,
     INTENTION_FIELD_LABEL,
     INTENTION_LINE_UNSET,
     INTENTION_MAX_LENGTH,
     INTENTION_MODAL_TITLE,
+    MSG_CUSTOM_MINUTES_INVALID,
     MSG_NOT_FACILITATOR,
+    MSG_UNTIL_TIME_INVALID,
     MSG_SESSION_INACTIVE,
     MSG_VOICE_CONNECT_FAILED,
     PHASE_DEEP_FOCUS,
+    UNTIL_TIME_LABEL,
+    UNTIL_TIME_PLACEHOLDER,
     SESSION_RECORD_INTENTION_SET,
     SESSION_RECORD_INTENTION_UNSET,
     SESSION_RECORD_META,
     TEACUP_BANNER,
     TIMER_BUTTON_LABEL,
     TIMER_CONTENT,
+    TIMER_CUSTOM_LABEL,
     TIMER_EMBED_TITLE,
     TIMER_FIELD_FACILITATOR,
     TIMER_FIELD_INTENTION,
@@ -44,6 +53,7 @@ from app.constants import (
     TIMER_FIELD_VALUE_MAX_LENGTH,
     TIMER_REMAINING,
     TIMER_TIME_RANGE,
+    TIMER_UNTIL_LABEL,
     VOICE_STATUS_TIMER,
     WELCOME_BANNER_BLOCK,
     WELCOME_EMBED_DESCRIPTION,
@@ -565,6 +575,139 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
 
 
 # ---------------------------------------------------------------------------
+# CustomDurationModal
+# ---------------------------------------------------------------------------
+
+
+def parse_custom_minutes(raw: str | None) -> int | None:
+    """Return *raw* as whole minutes within the custom bounds, else ``None``.
+
+    Only plain integers are accepted (surrounding whitespace is ignored);
+    ``"12.5"``, ``"12m"`` and out-of-range values are rejected rather than
+    coerced.
+    """
+    text = (raw or "").strip()
+    if not text.isdecimal():
+        return None
+    minutes = int(text)
+    if not CUSTOM_MIN_MINUTES <= minutes <= CUSTOM_MAX_MINUTES:
+        return None
+    return minutes
+
+
+class _DurationEntryModal(IntentionModal):
+    """Intention modal with an extra ``duration_field`` asked first.
+
+    Discord cannot open a second modal from a modal submit, so the duration
+    and the intention are captured together. Subclasses declare
+    ``duration_field`` and implement :meth:`_resolve_minutes`. The duration is
+    validated *before* the intention is recorded: an invalid value refuses
+    ephemerally and leaves the session PENDING so the facilitator can click
+    the button again.
+    """
+
+    duration_field: discord.ui.Label
+    invalid_message: str
+
+    def __init__(
+        self,
+        *,
+        bot: _ModalBot,
+        session_id: int,
+        channel: SessionChannel,
+    ) -> None:
+        super().__init__(bot=bot, session_id=session_id, channel=channel)
+        # Base-class items are registered first; move the intention field
+        # after the duration field so the duration is asked first.
+        self.remove_item(self.intention_field)
+        self.add_item(self.intention_field)
+
+    def _resolve_minutes(self, raw: str | None) -> int | None:
+        """Turn the duration field's raw text into minutes, or ``None``."""
+        raise NotImplementedError
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        session = self._bot._registry.get(self._session_id)
+        if not _session_actionable(session, expect=SessionState.PENDING):
+            await _send_refusal(interaction, MSG_SESSION_INACTIVE)
+            return
+
+        component = self.duration_field.component
+        raw = component.value if isinstance(component, discord.ui.TextInput) else None
+        minutes = self._resolve_minutes(raw)
+        if minutes is None:
+            await _send_refusal(interaction, self.invalid_message)
+            return
+
+        self._bot._registry.set_duration(
+            session_id=self._session_id, duration_minutes=minutes
+        )
+        await super().on_submit(interaction)
+
+
+class CustomDurationModal(_DurationEntryModal):
+    """Opened by the Custom button: the facilitator types a number of minutes."""
+
+    invalid_message = MSG_CUSTOM_MINUTES_INVALID.format(
+        min=CUSTOM_MIN_MINUTES, max=CUSTOM_MAX_MINUTES
+    )
+    duration_field: discord.ui.Label = discord.ui.Label(
+        text=CUSTOM_MINUTES_LABEL,
+        component=discord.ui.TextInput(
+            style=discord.TextStyle.short,
+            placeholder=CUSTOM_MINUTES_PLACEHOLDER.format(
+                min=CUSTOM_MIN_MINUTES, max=CUSTOM_MAX_MINUTES
+            ),
+            max_length=len(str(CUSTOM_MAX_MINUTES)),
+            required=True,
+        ),
+    )
+
+    def _resolve_minutes(self, raw: str | None) -> int | None:
+        return parse_custom_minutes(raw)
+
+
+class UntilTimeModal(_DurationEntryModal):
+    """Opened by the Until… button: the facilitator types a local end time.
+
+    Minutes are computed at submit time (so time spent typing the intention
+    is not lost), in :data:`TEAMODE_TIMEZONE`, rounded to the nearest minute.
+    A time already past today means tomorrow; the result must fall within the
+    same bounds as Custom.
+    """
+
+    invalid_message = MSG_UNTIL_TIME_INVALID.format(
+        min=CUSTOM_MIN_MINUTES, max=CUSTOM_MAX_MINUTES
+    )
+    duration_field: discord.ui.Label = discord.ui.Label(
+        text=UNTIL_TIME_LABEL,
+        component=discord.ui.TextInput(
+            style=discord.TextStyle.short,
+            placeholder=UNTIL_TIME_PLACEHOLDER,
+            max_length=12,
+            required=True,
+        ),
+    )
+
+    def _resolve_minutes(self, raw: str | None) -> int | None:
+        parsed = timer_format.parse_end_time(raw)
+        if parsed is None:
+            return None
+        minutes = timer_format.minutes_until(*parsed, _now(), TEAMODE_TIMEZONE)
+        if not CUSTOM_MIN_MINUTES <= minutes <= CUSTOM_MAX_MINUTES:
+            return None
+        return minutes
+
+
+# Timer-pick custom_id values that open a duration-entry modal instead of
+# carrying a preset number of minutes.
+_DURATION_ENTRY_MODALS: dict[str, type[_DurationEntryModal]] = {
+    "custom": CustomDurationModal,
+    "until": UntilTimeModal,
+}
+
+
+# ---------------------------------------------------------------------------
 # ViewsMixin — timer-pick button handling
 # ---------------------------------------------------------------------------
 
@@ -631,6 +774,22 @@ class ViewsMixin:
 
         if str(interaction.user.id) != session.facilitator_id:
             await _send_refusal(interaction, MSG_NOT_FACILITATOR)
+            return
+
+        # Custom / Until… buttons: the duration is entered in the modal itself
+        # and recorded on submit (see _DurationEntryModal.on_submit).
+        entry_modal = _DURATION_ENTRY_MODALS.get(parts[3]) if len(parts) > 3 else None
+        if entry_modal is not None:
+            assert isinstance(
+                interaction.channel, (discord.VoiceChannel, discord.TextChannel)
+            )
+            await interaction.response.send_modal(
+                entry_modal(
+                    bot=self,
+                    session_id=session_id,
+                    channel=interaction.channel,
+                )
+            )
             return
 
         # Parse the duration value from the custom_id.
@@ -728,7 +887,9 @@ def _build_timer_view(session_id: int, *, disabled: bool = False) -> discord.ui.
     """Build the duration timer-pick button row for *session_id*.
 
     Custom_ids follow UI-ADR § "Custom_id namespace":
-    ``teamode:<session_id>:timer:<value>``. Pass ``disabled=True`` to build
+    ``teamode:<session_id>:timer:<value>``, plus trailing Custom
+    (``timer:custom`` → :class:`CustomDurationModal`) and Until…
+    (``timer:until`` → :class:`UntilTimeModal`) buttons. Pass ``disabled=True`` to build
     the all-disabled row shown after pending expiry.
     """
     view = discord.ui.View()
@@ -740,4 +901,13 @@ def _build_timer_view(session_id: int, *, disabled: bool = False) -> discord.ui.
             disabled=disabled,
         )
         view.add_item(button)
+    for label, value in ((TIMER_CUSTOM_LABEL, "custom"), (TIMER_UNTIL_LABEL, "until")):
+        view.add_item(
+            discord.ui.Button(
+                label=label,
+                custom_id=f"teamode:{session_id}:timer:{value}",
+                style=discord.ButtonStyle.secondary,
+                disabled=disabled,
+            )
+        )
     return view

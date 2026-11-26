@@ -42,9 +42,12 @@ friends were already using.
 
      🥅 [Set Intention]  @mentions  ← participant prompt (1 s after welcome)
 
-     [ 5 min ]  [ 10 min ]  [ 25 min ]  [ 50 min ]   ← facilitator picks timer
+     [ 5 min ] [ 10 min ] [ 25 min ] [ 50 min ] [ Custom ]  ← facilitator picks timer
+     [ Until… ]
 
   ⌨  Modal: "What will you focus on?"   (optional — can be left blank)
+     Custom adds "How many minutes?" (whole number, 1–180) above it
+     Until… adds "End at what time?" (9:50, 1150, 13:50, 4:30pm, 5:00 PM)
 
   🍵 TeaMode • 25 min session           ← embed, edits every 10 seconds
      Facilitator's Intention: Finish the v26Q3 changelog
@@ -89,6 +92,17 @@ and what you set out to do, or check `/stats`.
   invocation (must be a voice channel's text chat, invoker must be in
   voice, no concurrent session in the channel), per-user (3 per 5
   minutes) and per-guild (50/day) rate limits.
+- **Timer lengths** — preset buttons for 5 / 10 / 25 / 50 minutes, plus:
+  - **Custom** — type any whole number of minutes (1–180).
+  - **Until…** — type the time you want the session to end
+    (`9:50`, `09:50`, `1150`, `13:50`, `4:30pm`, `5:00 PM`); Ocha
+    works out the minutes in `TEAMODE_TIMEZONE`, rounded to the nearest
+    minute. A time already past today means tomorrow, and the result
+    must be 1–180 minutes.
+
+  Both open the intention modal with the extra field on top. An invalid
+  entry gets a private refusal and the session stays open, so you can
+  click again. Available in `/teamode`, `/groove`, and Go again.
 - **`/handoff @user`** — manually transfer the facilitator role to
   another voice-channel member. Also happens automatically if the
   facilitator leaves voice with others remaining.
@@ -168,8 +182,9 @@ export TEAMODE_TIMEZONE="America/Los_Angeles"       # optional; IANA name, this 
   **skips command registration entirely** — set it to your server's
   guild ID(s) or your commands won't appear.
 - **`TEAMODE_TIMEZONE`** controls the wall-clock times shown in the
-  timer embed and voice channel status, and the local-midnight reset
-  for stats/streaks and the guild daily cap. An invalid IANA name logs
+  timer embed and voice channel status, the local-midnight reset
+  for stats/streaks and the guild daily cap, and how **Until…** end
+  times are read (everyone types times in this one timezone). An invalid IANA name logs
   a warning and falls back to the default; if even the default is
   unavailable, falls back to UTC.
 

@@ -6,20 +6,32 @@ import asyncio
 import logging
 import sqlite3
 from typing import Any, cast
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import discord
 import pytest
 
 from app.constants import (
+    CUSTOM_MAX_MINUTES,
+    CUSTOM_MIN_MINUTES,
+    MSG_CUSTOM_MINUTES_INVALID,
     MSG_NOT_FACILITATOR,
     MSG_SESSION_INACTIVE,
+    MSG_UNTIL_TIME_INVALID,
     MSG_VOICE_CONNECT_FAILED,
     TIMER_CONTENT,
     TIMER_EMBED_TITLE,
 )
 from app.discord_bot import TeaModeBot
-from app.discord_bot.views import IntentionModal, _SetupMessages
+from app.discord_bot.views import (
+    CustomDurationModal,
+    IntentionModal,
+    UntilTimeModal,
+    _SetupMessages,
+    parse_custom_minutes,
+)
 from app.db import init_db
 from app.session import SessionRegistry, SessionState
 
@@ -630,3 +642,290 @@ async def test_modal_submit_snapshots_participants(
         (session_id,),
     ).fetchall()
     assert rows == [("11", 0), ("12", 0)]
+
+
+# ---------------------------------------------------------------------------
+# Custom duration button + modal
+# ---------------------------------------------------------------------------
+
+
+def _close_coro(coro: object, **_kwargs: object) -> None:
+    """Close a coroutine handed to create_task so it is not left unawaited."""
+    if hasattr(coro, "close"):
+        coro.close()  # type: ignore[union-attr]
+
+
+def _set_custom_fields(
+    modal: CustomDurationModal | UntilTimeModal, minutes: str, intention: str
+) -> None:
+    """Populate the custom modal's text inputs as discord.py would on submit."""
+    cast(
+        discord.ui.TextInput[discord.ui.Modal], modal.duration_field.component
+    )._value = minutes
+    cast(
+        discord.ui.TextInput[discord.ui.Modal], modal.intention_field.component
+    )._value = intention
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("37", 37),
+        (" 12 ", 12),
+        (str(CUSTOM_MIN_MINUTES), CUSTOM_MIN_MINUTES),
+        (str(CUSTOM_MAX_MINUTES), CUSTOM_MAX_MINUTES),
+        ("0", None),
+        (str(CUSTOM_MAX_MINUTES + 1), None),
+        ("-5", None),
+        ("12.5", None),
+        ("12m", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_parse_custom_minutes(raw: str | None, expected: int | None) -> None:
+    """Only whole minutes within the custom bounds are accepted."""
+    assert parse_custom_minutes(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_custom_click_opens_custom_modal_without_setting_duration(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """Clicking Custom opens CustomDurationModal; no duration is recorded yet."""
+    session_id = _seed_session(registry, facilitator_id=111)
+    inter = _make_component_interaction(
+        f"teamode:{session_id}:timer:custom",
+        user_id=111,
+        voice_channel=MagicMock(spec=discord.VoiceChannel),
+    )
+
+    await bot.on_interaction(inter)
+
+    inter.response.send_modal.assert_called_once()
+    modal = inter.response.send_modal.call_args.args[0]
+    assert isinstance(modal, CustomDurationModal)
+    # Minutes field is asked first, intention second.
+    assert modal.children == [modal.duration_field, modal.intention_field]
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.duration_minutes is None
+
+
+@pytest.mark.asyncio
+async def test_custom_click_by_non_facilitator_is_refused(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """Only the facilitator may open the custom-duration modal."""
+    session_id = _seed_session(registry, facilitator_id=111)
+    inter = _make_component_interaction(
+        f"teamode:{session_id}:timer:custom",
+        user_id=999,
+        voice_channel=MagicMock(spec=discord.VoiceChannel),
+    )
+
+    await bot.on_interaction(inter)
+
+    inter.response.send_modal.assert_not_called()
+    embed: discord.Embed = inter.response.send_message.call_args.kwargs["embed"]
+    assert embed.description == MSG_NOT_FACILITATOR
+
+
+@pytest.mark.asyncio
+async def test_custom_modal_submit_sets_duration_and_activates(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """A valid custom value records the duration and runs the normal start flow."""
+    session_id = _seed_session(registry, facilitator_id=111)
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
+    modal = CustomDurationModal(
+        bot=bot, session_id=session_id, channel=fake_voice_channel
+    )
+    _set_custom_fields(modal, "37", "write the custom timer")
+
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+    inter.channel = fake_voice_channel
+
+    with (
+        patch("app.discord_bot.views.voice.connect", return_value=AsyncMock()),
+        patch("app.discord_bot.tasks.asyncio.create_task", side_effect=_close_coro),
+    ):
+        await modal.on_submit(inter)
+
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.duration_minutes == 37
+    assert session.intention == "write the custom timer"
+    assert session.state == SessionState.ACTIVE
+    timer_call = fake_voice_channel.send.call_args_list[0]
+    assert timer_call.kwargs["content"] == TIMER_CONTENT.format(mmss="37:00")
+    assert timer_call.kwargs["embed"].title == TIMER_EMBED_TITLE.format(duration=37)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["0", "abc", "12.5", str(CUSTOM_MAX_MINUTES + 1)])
+async def test_custom_modal_invalid_minutes_refused_and_stays_pending(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+    raw: str,
+) -> None:
+    """An invalid value refuses ephemerally and leaves the session PENDING."""
+    session_id = _seed_session(registry, facilitator_id=111)
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    modal = CustomDurationModal(
+        bot=bot, session_id=session_id, channel=fake_voice_channel
+    )
+    _set_custom_fields(modal, raw, "should not be recorded")
+
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+
+    with patch("app.discord_bot.views.voice.connect") as mock_connect:
+        await modal.on_submit(inter)
+
+    kwargs = inter.response.send_message.call_args.kwargs
+    assert kwargs.get("ephemeral") is True
+    assert kwargs["embed"].description == MSG_CUSTOM_MINUTES_INVALID.format(
+        min=CUSTOM_MIN_MINUTES, max=CUSTOM_MAX_MINUTES
+    )
+    mock_connect.assert_not_called()
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.state == SessionState.PENDING
+    assert session.duration_minutes is None
+    assert session.intention is None
+
+
+@pytest.mark.asyncio
+async def test_custom_modal_submit_on_stale_session_is_refused(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """Submitting after the session left PENDING refuses and records nothing."""
+    session_id = _seed_session(registry, facilitator_id=111)
+    registry.mark_cancelled(session_id=session_id)
+    modal = CustomDurationModal(
+        bot=bot,
+        session_id=session_id,
+        channel=MagicMock(spec=discord.VoiceChannel),
+    )
+    _set_custom_fields(modal, "20", "")
+
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+    await modal.on_submit(inter)
+
+    embed: discord.Embed = inter.response.send_message.call_args.kwargs["embed"]
+    assert embed.description == MSG_SESSION_INACTIVE
+
+
+# ---------------------------------------------------------------------------
+# Until… button + modal
+# ---------------------------------------------------------------------------
+
+_LA = ZoneInfo("America/Los_Angeles")
+_FIXED_NOW = datetime(2026, 11, 25, 23, 20, tzinfo=_LA)
+
+
+@pytest.mark.asyncio
+async def test_until_click_opens_until_modal(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """Clicking Until… opens UntilTimeModal with the end-time field first."""
+    session_id = _seed_session(registry, facilitator_id=111)
+    inter = _make_component_interaction(
+        f"teamode:{session_id}:timer:until",
+        user_id=111,
+        voice_channel=MagicMock(spec=discord.VoiceChannel),
+    )
+
+    await bot.on_interaction(inter)
+
+    modal = inter.response.send_modal.call_args.args[0]
+    assert isinstance(modal, UntilTimeModal)
+    assert modal.children == [modal.duration_field, modal.intention_field]
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.duration_minutes is None
+
+
+@pytest.mark.asyncio
+async def test_until_modal_submit_computes_minutes_and_activates(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+) -> None:
+    """23:55 typed at 23:20 local starts a 35-minute session."""
+    session_id = _seed_session(registry, facilitator_id=111)
+    fake_voice_channel = MagicMock(spec=discord.VoiceChannel)
+    fake_voice_channel.send = AsyncMock(return_value=AsyncMock())
+    modal = UntilTimeModal(bot=bot, session_id=session_id, channel=fake_voice_channel)
+    _set_custom_fields(modal, "23:55", "ship it")
+
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+    inter.channel = fake_voice_channel
+
+    with (
+        patch("app.discord_bot.views._now", return_value=_FIXED_NOW),
+        patch("app.discord_bot.views.TEAMODE_TIMEZONE", _LA),
+        patch("app.discord_bot.views.voice.connect", return_value=AsyncMock()),
+        patch("app.discord_bot.tasks.asyncio.create_task", side_effect=_close_coro),
+    ):
+        await modal.on_submit(inter)
+
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.duration_minutes == 35
+    assert session.state == SessionState.ACTIVE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "noon",  # unparseable
+        "25:00",  # out of range hour
+        "23:20",  # same minute -> tomorrow -> > max
+        "10:00",  # tomorrow morning -> > max
+    ],
+)
+async def test_until_modal_invalid_time_refused_and_stays_pending(
+    bot: TeaModeBot,
+    registry: SessionRegistry,
+    raw: str,
+) -> None:
+    """Unparseable or out-of-bounds end times refuse and leave the session PENDING."""
+    session_id = _seed_session(registry, facilitator_id=111)
+    modal = UntilTimeModal(
+        bot=bot,
+        session_id=session_id,
+        channel=MagicMock(spec=discord.VoiceChannel),
+    )
+    _set_custom_fields(modal, raw, "")
+
+    inter = AsyncMock()
+    inter.response = AsyncMock()
+
+    with (
+        patch("app.discord_bot.views._now", return_value=_FIXED_NOW),
+        patch("app.discord_bot.views.TEAMODE_TIMEZONE", _LA),
+        patch("app.discord_bot.views.voice.connect") as mock_connect,
+    ):
+        await modal.on_submit(inter)
+
+    kwargs = inter.response.send_message.call_args.kwargs
+    assert kwargs.get("ephemeral") is True
+    assert kwargs["embed"].description == MSG_UNTIL_TIME_INVALID.format(
+        min=CUSTOM_MIN_MINUTES, max=CUSTOM_MAX_MINUTES
+    )
+    mock_connect.assert_not_called()
+    session = registry.get(session_id)
+    assert session is not None
+    assert session.state == SessionState.PENDING
+    assert session.duration_minutes is None
