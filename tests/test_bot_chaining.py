@@ -547,6 +547,37 @@ async def test_break_start_voice_connect_failure_continues_without_status(
 
 
 @pytest.mark.asyncio
+async def test_break_start_unexpected_connect_error_propagates(
+    bot: TeaModeBot,
+) -> None:
+    """Only VOICE_ERRORS are treated as "no voice" — a bug-shaped exception
+    from voice.connect surfaces instead of being logged as a connect failure."""
+    channel = _make_fake_voice_channel(channel_id=333)
+    _install_fake_client(bot, channel, user_id=9)
+    bot._chain_states[333] = _ChainState(session_id=42, channel_id=333, message_id=555)
+    started_msg = AsyncMock(spec=discord.Message)
+    started_msg.id = 8000
+    channel.send.return_value = started_msg
+    inter = _make_button_interaction(
+        42, "break", channel_id=333, user_id=555, channel=channel
+    )
+
+    captured, side_effect = _capture_and_discard()
+    with (
+        patch(
+            "app.discord_bot.breaks.voice.connect",
+            new=AsyncMock(side_effect=ValueError("bug")),
+        ),
+        patch("app.discord_bot.tasks.asyncio.create_task", side_effect=side_effect),
+        pytest.raises(ValueError, match="bug"),
+    ):
+        await bot.on_interaction(inter)
+
+    for coro in captured:
+        coro.close()
+
+
+@pytest.mark.asyncio
 async def test_break_click_not_in_voice_is_refused(bot: TeaModeBot) -> None:
     bot._chain_states[333] = _ChainState(session_id=42, channel_id=333, message_id=1)
     inter = _make_button_interaction(

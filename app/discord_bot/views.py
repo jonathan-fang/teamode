@@ -12,8 +12,7 @@ from typing import TYPE_CHECKING, Protocol
 import discord
 
 from app import session as session_module
-from app import timer_format
-from app import voice
+from app import timer_format, voice
 from app.config import TEAMODE_TIMEZONE
 from app.constants import (
     BACKOFF_FLOOR_DEFAULT,
@@ -33,12 +32,10 @@ from app.constants import (
     INTENTION_MODAL_TITLE,
     MSG_CUSTOM_MINUTES_INVALID,
     MSG_NOT_FACILITATOR,
-    MSG_UNTIL_TIME_INVALID,
     MSG_SESSION_INACTIVE,
+    MSG_UNTIL_TIME_INVALID,
     MSG_VOICE_CONNECT_FAILED,
     PHASE_DEEP_FOCUS,
-    UNTIL_TIME_LABEL,
-    UNTIL_TIME_PLACEHOLDER,
     SESSION_RECORD_INTENTION_SET,
     SESSION_RECORD_INTENTION_UNSET,
     SESSION_RECORD_META,
@@ -54,11 +51,14 @@ from app.constants import (
     TIMER_REMAINING,
     TIMER_TIME_RANGE,
     TIMER_UNTIL_LABEL,
+    UNTIL_TIME_LABEL,
+    UNTIL_TIME_PLACEHOLDER,
     VOICE_STATUS_TIMER,
     WELCOME_BANNER_BLOCK,
     WELCOME_EMBED_DESCRIPTION,
     WELCOME_EMBED_TITLE,
 )
+from app.discord_bot.messages import best_effort
 from app.discord_bot.tasks import spawn_logged
 from app.session import SessionMode, SessionRegistry, SessionState
 
@@ -405,16 +405,14 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
         # voice connect / session activation below.
         setup = self._bot._setup_messages.get(self._session_id)
         if setup is not None:
-            try:
-                await self._channel.get_partial_message(setup.welcome_message_id).edit(
+            await best_effort(
+                self._channel.get_partial_message(setup.welcome_message_id).edit(
                     view=_build_timer_view(self._session_id, disabled=True)
-                )
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                logger.warning(
-                    "Failed to disable welcome buttons on intention submit"
-                    " for session %s",
-                    self._session_id,
-                )
+                ),
+                logger,
+                "Failed to disable welcome buttons on intention submit for session %s",
+                self._session_id,
+            )
 
         # --- Groove: no voice — straight to the timer ---
         if session.mode == SessionMode.GROOVE:
@@ -435,7 +433,7 @@ class IntentionModal(discord.ui.Modal, title=INTENTION_MODAL_TITLE):
             return
         try:
             voice_client = await voice.connect(voice_channel)
-        except Exception:
+        except Exception:  # deliberately broad: any failure must cancel the session
             logger.exception("Voice connect failed for session %s", self._session_id)
             await interaction.followup.send(MSG_VOICE_CONNECT_FAILED, ephemeral=True)
             self._bot._registry.mark_cancelled(session_id=self._session_id)
@@ -792,7 +790,6 @@ class ViewsMixin:
             )
             return
 
-        # Parse the duration value from the custom_id.
         try:
             duration_minutes = int(parts[3])
         except (IndexError, ValueError):

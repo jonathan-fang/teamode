@@ -31,7 +31,7 @@ def spawn_logged(coro: Coroutine[Any, Any, None], *, name: str) -> asyncio.Task[
             await coro
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception:  # the whole point: never drop a task failure silently
             logger.exception("Background task %r failed", name)
 
     return asyncio.create_task(_runner(), name=name)

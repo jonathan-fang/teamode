@@ -32,6 +32,7 @@ teamode/                      ← repo root
 │   │   ├── breaks.py         ← chaining and break flow
 │   │   ├── clear.py          ← /teamode-clear
 │   │   ├── stats.py          ← /teamode-stats
+│   │   ├── messages.py       ← best_effort() for message delete/edit calls
 │   │   └── tasks.py          ← background-task helpers
 │   ├── constants.py          ← every tunable + every Discord-facing string
 │   ├── config.py             ← env var loading (no discord import)

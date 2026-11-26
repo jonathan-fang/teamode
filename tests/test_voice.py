@@ -3,11 +3,13 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import discord
 import pytest
 
 from app.voice import (
     REVERIE_PATH,
+    VOICE_ERRORS,
     WIND_CHIME_PATH,
     connect,
     disconnect,
@@ -305,3 +307,40 @@ async def test_play_reverie_then_disconnect_disconnect_error_does_not_mask_succe
     # Disconnect was attempted (and raised), but return value still reflects playback success
     fake_client.disconnect.assert_called_once()
     assert result is True
+
+
+# ---------------------------------------------------------------------------
+# VOICE_ERRORS — what graceful-degradation callers catch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        discord.ClientException("ffmpeg not found"),
+        discord.opus.OpusNotLoaded(),
+        asyncio.TimeoutError(),
+        RuntimeError("PyNaCl library needed in order to use voice"),
+        TypeError("Expected discord.VoiceClient"),
+        OSError("network down"),
+        aiohttp.ClientError("ws failed"),
+    ],
+)
+def test_voice_errors_cover_real_voice_failures(exc: BaseException) -> None:
+    assert isinstance(exc, VOICE_ERRORS)
+
+
+@pytest.mark.parametrize("exc", [ValueError("bug"), KeyError("bug"), AttributeError()])
+def test_voice_errors_exclude_programming_errors(exc: BaseException) -> None:
+    assert not isinstance(exc, VOICE_ERRORS)
+
+
+@pytest.mark.asyncio
+async def test_play_reverie_then_disconnect_unexpected_play_error_propagates() -> None:
+    """A non-voice exception from play() is not swallowed as a playback failure."""
+    fake_client = _make_fake_voice_client()
+    fake_client.play.side_effect = ValueError("bug")
+
+    with patch("app.voice.discord.FFmpegPCMAudio"):
+        with pytest.raises(ValueError, match="bug"):
+            await play_reverie_then_disconnect(fake_client)
